@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      background: #020617; overflow: hidden; font-family: sans-serif;
+    }
+    canvas { display: block; width: 100%; height: 100%; }
+    .hud {
+      position: fixed; top: 10px; left: 10px;
+      color: #818cf8; font-size: 11px; font-family: monospace;
+      background: rgba(15, 23, 42, 0.75); padding: 4px 8px; border-radius: 6px;
+      border: 1px solid rgba(129, 140, 248, 0.25); backdrop-filter: blur(4px);
+    }
+  </style>
+</head>
+<body>
+  <div class="hud">keplerian-orbit &middot; running</div>
+  <canvas id="c"></canvas>
+  <script>
+    const c = document.getElementById('c'), ctx = c.getContext('2d');
+    function resize() { c.width = window.innerWidth; c.height = window.innerHeight; }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let t = 0;
+    function frame() {
+      ctx.fillStyle = '#020617';
+      ctx.fillRect(0, 0, c.width, c.height);
+      const cx = c.width / 2, cy = c.height / 2;
+      const a = Math.min(cx, cy) * 0.75, b = a * 0.58;
+      const focusX = Math.sqrt(a * a - b * b);
+
+      // Orbital ellipse
+      ctx.strokeStyle = 'rgba(129, 140, 248, 0.3)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, a, b, 0, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Sun at focal point
+      ctx.fillStyle = '#fbbf24';
+      ctx.shadowColor = '#fbbf24';
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      ctx.arc(cx - focusX, cy, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Orbiting planet position
+      t += 0.024;
+      const px = cx + a * Math.cos(t);
+      const py = cy + b * Math.sin(t);
+
+      // Radius vector
+      ctx.strokeStyle = 'rgba(129, 140, 248, 0.35)';
+      ctx.beginPath();
+      ctx.moveTo(cx - focusX, cy);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+
+      // Planet sphere
+      ctx.fillStyle = '#818cf8';
+      ctx.beginPath();
+      ctx.arc(px, py, 6.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      requestAnimationFrame(frame);
+    }
+    frame();
+  </script>
+</body>
+</html>

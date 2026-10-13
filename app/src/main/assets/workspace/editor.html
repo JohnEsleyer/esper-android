@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      background: #020617; color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      font-size: 15px; line-height: 1.68;
+      height: 100%; overflow-x: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #editor {
+      min-height: 100%;
+      padding: 16px 20px 100px 20px;
+      outline: none;
+      word-break: break-word;
+    }
+    #editor:empty:before {
+      content: attr(data-placeholder);
+      color: #475569;
+      pointer-events: none;
+      display: block;
+    }
+    h1 { font-size: 1.55rem; font-weight: 800; color: #fff; margin: 1.1rem 0 0.4rem 0; letter-spacing: -0.02em; border-bottom: 1px solid #1e293b; padding-bottom: 0.35rem; }
+    h2 { font-size: 1.25rem; font-weight: 700; color: #f1f5f9; margin: 0.9rem 0 0.35rem 0; }
+    h3 { font-size: 1.05rem; font-weight: 600; color: #e2e8f0; margin: 0.75rem 0 0.25rem 0; }
+    p { margin: 0.45rem 0; color: #cbd5e1; }
+    code { font-family: ui-monospace, monospace; background: #1e293b; color: #a5b4fc; padding: 2px 6px; border-radius: 4px; font-size: 0.88em; border: 1px solid rgba(255,255,255,0.06); }
+    pre { background: #030712; border: 1px solid #1e293b; padding: 12px; border-radius: 8px; overflow-x: auto; color: #e0e7ff; margin: 0.8rem 0; }
+    blockquote { border-left: 3px solid #6366f1; margin: 0.75rem 0; padding-left: 0.85rem; color: #94a3b8; font-style: italic; background: rgba(99,102,241,0.07); border-radius: 0 6px 6px 0; }
+    .ts-tag { background: rgba(99,102,241,0.25); color: #a5b4fc; border: 1px solid rgba(99,102,241,0.45); padding: 1px 7px; border-radius: 6px; font-weight: 600; font-family: monospace; cursor: pointer; display: inline-block; }
+    .ts-tag:active { background: #6366f1; color: #fff; }
+  </style>
+</head>
+<body>
+  <div id="editor" contenteditable="true" spellcheck="false" data-placeholder="# Start writing notes..."></div>
+
+  <script>
+    const editor = document.getElementById('editor');
+    let syncTimer = null;
+
+    window.setMarkdown = function(md) {
+      if (document.activeElement === editor) return;
+      editor.innerHTML = parseMarkdown(md);
+    };
+
+    editor.addEventListener('input', () => {
+      clearTimeout(syncTimer);
+      syncTimer = setTimeout(() => {
+        if (window.EsperBridge && window.EsperBridge.onContentChanged) {
+          window.EsperBridge.onContentChanged(editor.innerText);
+        }
+      }, 250);
+    });
+
+    document.addEventListener('click', (e) => {
+      if (e.target.classList.contains('ts-tag')) {
+        const secs = e.target.getAttribute('data-seconds');
+        if (window.EsperBridge && window.EsperBridge.onTimestampClicked) {
+          window.EsperBridge.onTimestampClicked(parseInt(secs, 10));
+        }
+      }
+    });
+
+    function parseMarkdown(md) {
+      if (!md) return '';
+      let out = md
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+        .replace(/^\> (.*$)/gim, '<blockquote>$1</blockquote>')
+        .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+        .replace(/`([^`]+)`/gim, '<code>$1</code>')
+        .replace(/\[(\d{1,2}:\d{2})\]/gim, (m, ts) => {
+          const parts = ts.split(':');
+          const s = parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+          return `<span class="ts-tag" data-seconds="${s}">[${ts}]</span>`;
+        });
+      return out.replace(/\n\n/g, '<p></p>');
+    }
+  </script>
+</body>
+</html>
