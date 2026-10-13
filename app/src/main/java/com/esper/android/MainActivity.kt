@@ -161,20 +161,7 @@ class MainActivity : ComponentActivity() {
                             isAuthenticated = true
                             prefs.edit().putBoolean("is_offline_mode", true).putBoolean("is_authenticated", true).apply()
                         },
-                        onLoginWithGoogle = {
-                            // OAuth Clerk Simulation login
-                            val mockClerkToken = "clerk_session_${UUID.randomUUID().toString().take(12)}"
-                            prefs.edit()
-                                .putString("clerk_jwt_token", mockClerkToken)
-                                .putBoolean("is_authenticated", true)
-                                .putBoolean("is_offline_mode", false)
-                                .apply()
-                            isOfflineMode = false
-                            isAuthenticated = true
-                            Toast.makeText(applicationContext, "Signed in via Google", Toast.LENGTH_SHORT).show()
-                            syncWithCloud()
-                        },
-                        onConfigureCustomToken = { token ->
+                        onAuthSuccess = { token ->
                             prefs.edit()
                                 .putString("clerk_jwt_token", token)
                                 .putBoolean("is_authenticated", true)
@@ -182,7 +169,7 @@ class MainActivity : ComponentActivity() {
                                 .apply()
                             isOfflineMode = false
                             isAuthenticated = true
-                            Toast.makeText(applicationContext, "Session Token saved", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(applicationContext, "Signed in via Clerk!", Toast.LENGTH_SHORT).show()
                             syncWithCloud()
                         }
                     )

@@ -63,21 +63,6 @@ fun BookCard(
                     )
                 }
 
-                // Decorative spine crease on the left edge
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(7.dp)
-                        .background(
-                            Brush.horizontalGradient(
-                                listOf(
-                                    Color.Black.copy(alpha = 0.55f),
-                                    Color.White.copy(alpha = 0.12f),
-                                    Color.Transparent
-                                )
-                            )
-                        )
-                )
 
                 // Top action icons
                 Row(
