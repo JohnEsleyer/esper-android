@@ -9,23 +9,19 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
+import com.esper.android.data.export.ZipExporter
 import com.esper.android.data.local.EsperDatabase
 import com.esper.android.data.model.*
 import com.esper.android.data.remote.RemoteClient
 import com.esper.android.ui.auth.LoginScreen
+import com.esper.android.ui.bookshelf.AllTagsScreen
 import com.esper.android.ui.bookshelf.BookshelfScreen
-import com.esper.android.ui.theme.CosmicSlate
+import com.esper.android.ui.bookshelf.CreateNotebookScreen
+import com.esper.android.ui.bookshelf.SettingsScreen
 import com.esper.android.ui.theme.EsperTheme
-import com.esper.android.ui.theme.TextMuted
-import com.esper.android.ui.theme.TextPrimary
 import com.esper.android.ui.workspace.QuestionEditorScreen
 import com.esper.android.ui.workspace.WorkspaceScreen
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -40,6 +36,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
+
+enum class ActiveScreen {
+    BOOKSHELF,
+    ALL_TAGS,
+    SETTINGS,
+    CREATE_NOTEBOOK,
+    WORKSPACE
+}
 
 class MainActivity : ComponentActivity() {
 
@@ -60,14 +64,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             EsperTheme {
                 val coroutineScope = rememberCoroutineScope()
+                var currentScreen by remember { mutableStateOf(ActiveScreen.BOOKSHELF) }
                 var activeNotebookId by remember { mutableStateOf<String?>(null) }
                 var activePageIndex by remember { mutableIntStateOf(0) }
                 var activeEditingQuestion by remember { mutableStateOf<QuestionEntity?>(null) }
-                var showSettingsDialog by remember { mutableStateOf(false) }
+                var selectedTagFilter by remember { mutableStateOf("All") }
 
-                // Tabs management: list of open notebook ids
                 var openTabIds by remember { mutableStateOf<List<String>>(listOf("kepler-001")) }
-
                 var currentUser by remember { mutableStateOf<FirebaseUser?>(auth.currentUser) }
                 var isOfflineMode by remember { mutableStateOf(false) }
 
@@ -89,9 +92,10 @@ class MainActivity : ComponentActivity() {
                         if (task.isSuccessful) {
                             user.reload().addOnCompleteListener {
                                 currentUser = auth.currentUser
+                                Toast.makeText(applicationContext, "Display name updated", Toast.LENGTH_SHORT).show()
                             }
                         } else {
-                            Toast.makeText(applicationContext, "Name update failed: ${task.exception?.localizedMessage}", Toast.LENGTH_LONG).show()
+                            Toast.makeText(applicationContext, "Update failed: ${task.exception?.localizedMessage}", Toast.LENGTH_LONG).show()
                         }
                     }
                 }
@@ -104,11 +108,7 @@ class MainActivity : ComponentActivity() {
                         val account = task.getResult(ApiException::class.java)
                         val idToken = account.idToken
                         if (idToken.isNullOrBlank()) {
-                            Toast.makeText(
-                                applicationContext,
-                                "Google Sign-In failed: No ID Token. Verify SHA-1 in Firebase Console.",
-                                Toast.LENGTH_LONG
-                            ).show()
+                            Toast.makeText(applicationContext, "No ID Token received", Toast.LENGTH_LONG).show()
                             return@rememberLauncherForActivityResult
                         }
 
@@ -120,26 +120,10 @@ class MainActivity : ComponentActivity() {
                                 isOfflineMode = false
                                 updateAuthToken(user)
                                 Toast.makeText(applicationContext, "Signed in as ${user?.displayName}", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(
-                                    applicationContext,
-                                    "Firebase auth failed: ${authTask.exception?.localizedMessage}",
-                                    Toast.LENGTH_LONG
-                                ).show()
                             }
                         }
-                    } catch (e: ApiException) {
-                        Log.e("EsperAuth", "Google Sign-In ApiException code: ${e.statusCode}", e)
-                        val message = when (e.statusCode) {
-                            10 -> "Developer Error (10): Missing debug SHA-1 fingerprint in Firebase Console."
-                            7 -> "Network error (7): Please check your internet connection."
-                            12500 -> "Sign-in failed (12500): Check Play Services config."
-                            else -> "Google Sign-In failed (${e.statusCode}): ${e.localizedMessage ?: "Canceled"}"
-                        }
-                        Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
                     } catch (e: Exception) {
-                        Log.e("EsperAuth", "Unexpected auth error", e)
-                        Toast.makeText(applicationContext, "Authentication failed: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                        Log.e("EsperAuth", "Sign-in exception", e)
                     }
                 }
 
@@ -159,7 +143,7 @@ class MainActivity : ComponentActivity() {
                     currentUser = null
                     isOfflineMode = false
                     updateAuthToken(null)
-                    Toast.makeText(applicationContext, "Signed out", Toast.LENGTH_SHORT).show()
+                    currentScreen = ActiveScreen.BOOKSHELF
                 }
 
                 LaunchedEffect(Unit) {
@@ -178,7 +162,17 @@ class MainActivity : ComponentActivity() {
                     notebooks.filter { openTabIds.contains(it.id) }
                 }
 
-                // Seed demo notebook on first run
+                var customTags by remember {
+                    mutableStateOf(listOf("Research", "Astrodynamics", "Physics", "Lectures", "Drafts"))
+                }
+
+                val allTags = remember(notebooks, customTags) {
+                    val extracted = notebooks.flatMap { it.tagsCsv.split(",") }
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                    listOf("All") + (customTags + extracted).distinct()
+                }
+
                 LaunchedEffect(Unit) {
                     coroutineScope.launch {
                         val existing = db.dao().getNotebookById("kepler-001")
@@ -224,7 +218,8 @@ class MainActivity : ComponentActivity() {
                                         isPinned = r.isPinned ?: false,
                                         tagsCsv = r.tags?.joinToString(",") ?: "",
                                         coverPreset = r.coverPreset ?: "celestial",
-                                        coverImage = r.coverImage
+                                        coverImage = r.coverImage,
+                                        updatedAt = System.currentTimeMillis()
                                     )
                                 )
                                 r.pages?.mapIndexed { idx, p ->
@@ -275,9 +270,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // SCREEN NAVIGATION TREE
                 when {
-                    // 1. Not signed in and offline mode not active -> show Login Screen
                     currentUser == null && !isOfflineMode -> {
                         LoginScreen(
                             onSignInWithGoogle = { launchGoogleSignIn() },
@@ -285,40 +278,47 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    // 2. Question Editor View
-                    activeEditingQuestion != null -> {
-                        QuestionEditorScreen(
-                            question = activeEditingQuestion!!,
-                            onNavigateBack = { activeEditingQuestion = null },
-                            onSaveAnswer = { qId, ans ->
-                                coroutineScope.launch {
-                                    db.dao().updateQuestionAnswer(qId, ans)
-                                }
+                    currentScreen == ActiveScreen.ALL_TAGS -> {
+                        AllTagsScreen(
+                            allTags = allTags,
+                            notebooks = notebooks,
+                            selectedTag = selectedTagFilter,
+                            onSelectTag = { tag -> selectedTagFilter = tag },
+                            onCreateTag = { newTag ->
+                                if (!customTags.contains(newTag)) customTags = customTags + newTag
                             },
-                            onUpdateTitle = { qId, newTitle ->
-                                coroutineScope.launch {
-                                    db.dao().updateQuestionTitle(qId, newTitle)
-                                }
-                            }
+                            onRenameTag = { oldTag, newTag ->
+                                customTags = customTags.map { if (it == oldTag) newTag else it }
+                                if (selectedTagFilter == oldTag) selectedTagFilter = newTag
+                            },
+                            onDeleteTag = { tag ->
+                                customTags = customTags.filter { it != tag }
+                                if (selectedTagFilter == tag) selectedTagFilter = "All"
+                            },
+                            onNavigateBack = { currentScreen = ActiveScreen.BOOKSHELF }
                         )
                     }
 
-                    // 3. Bookshelf View
-                    activeNotebookId == null -> {
-                        BookshelfScreen(
-                            notebooks = notebooks,
-                            shelves = shelves,
-                            allDetails = allDetails,
+                    currentScreen == ActiveScreen.SETTINGS -> {
+                        SettingsScreen(
                             currentUser = currentUser,
-                            onSignOut = { signOut() },
-                            onOpenNotebook = { id ->
-                                if (!openTabIds.contains(id)) {
-                                    openTabIds = openTabIds + id
-                                }
-                                activeNotebookId = id
-                                activePageIndex = 0
+                            currentDisplayName = currentUser?.displayName ?: "Esper User",
+                            notebookCount = notebooks.size,
+                            shelfCount = shelves.size,
+                            onUpdateDisplayName = { newName -> updateDisplayName(newName) },
+                            onExportZip = {
+                                val fileName = ZipExporter.exportToDownloads(applicationContext, allDetails)
+                                Toast.makeText(applicationContext, "Saved: $fileName", Toast.LENGTH_LONG).show()
                             },
-                            onCreateNotebook = { title, desc, tags, preset, coverImage ->
+                            onSyncNow = { syncWithCloud() },
+                            onSignOut = { signOut() },
+                            onNavigateBack = { currentScreen = ActiveScreen.BOOKSHELF }
+                        )
+                    }
+
+                    currentScreen == ActiveScreen.CREATE_NOTEBOOK -> {
+                        CreateNotebookScreen(
+                            onSaveNotebook = { title, desc, tags, preset, coverImage ->
                                 coroutineScope.launch {
                                     val newId = "doc-${UUID.randomUUID().toString().take(8)}"
                                     val book = NotebookEntity(
@@ -344,6 +344,7 @@ class MainActivity : ComponentActivity() {
                                     openTabIds = openTabIds + newId
                                     activeNotebookId = newId
                                     activePageIndex = 0
+                                    currentScreen = ActiveScreen.WORKSPACE
                                     launch(Dispatchers.IO) {
                                         try {
                                             api.createNote(mapOf("id" to newId, "title" to title, "description" to desc))
@@ -351,41 +352,24 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             },
-                            onDeleteNotebook = { id ->
-                                coroutineScope.launch {
-                                    db.dao().deleteNotebook(id)
-                                    openTabIds = openTabIds - id
-                                    launch(Dispatchers.IO) {
-                                        try { api.deleteNote(id) } catch (_: Exception) {}
-                                    }
-                                }
-                            },
-                            onCreateShelf = { title, desc, color ->
-                                coroutineScope.launch {
-                                    val sId = "s-${UUID.randomUUID().toString().take(8)}"
-                                    db.dao().upsertShelf(
-                                        ShelfEntity(id = sId, title = title, description = desc, color = color)
-                                    )
-                                    launch(Dispatchers.IO) {
-                                        try { api.createShelf(mapOf("id" to sId, "title" to title, "color" to color)) } catch (_: Exception) {}
-                                    }
-                                }
-                            },
-                            onDeleteShelf = { id ->
-                                coroutineScope.launch {
-                                    db.dao().deleteShelf(id)
-                                    launch(Dispatchers.IO) {
-                                        try { api.deleteShelf(id) } catch (_: Exception) {}
-                                    }
-                                }
-                            },
-                            onSyncWithRemote = { syncWithCloud() },
-                            onUpdateDisplayName = { newName -> updateDisplayName(newName) }
+                            onNavigateBack = { currentScreen = ActiveScreen.BOOKSHELF }
                         )
                     }
 
-                    // 4. Workspace View
-                    else -> {
+                    activeEditingQuestion != null -> {
+                        QuestionEditorScreen(
+                            question = activeEditingQuestion!!,
+                            onNavigateBack = { activeEditingQuestion = null },
+                            onSaveAnswer = { qId, ans ->
+                                coroutineScope.launch { db.dao().updateQuestionAnswer(qId, ans) }
+                            },
+                            onUpdateTitle = { qId, newTitle ->
+                                coroutineScope.launch { db.dao().updateQuestionTitle(qId, newTitle) }
+                            }
+                        )
+                    }
+
+                    activeNotebookId != null && currentScreen == ActiveScreen.WORKSPACE -> {
                         val details by db.dao().observeNotebookDetails(activeNotebookId!!).collectAsState(initial = null)
                         details?.let { book ->
                             WorkspaceScreen(
@@ -406,13 +390,18 @@ class MainActivity : ComponentActivity() {
                                     if (activeNotebookId == closedId) {
                                         activeNotebookId = remaining.lastOrNull()
                                         activePageIndex = 0
+                                        if (activeNotebookId == null) currentScreen = ActiveScreen.BOOKSHELF
                                     }
                                 },
                                 onCloseAllTabs = {
                                     openTabIds = emptyList()
                                     activeNotebookId = null
+                                    currentScreen = ActiveScreen.BOOKSHELF
                                 },
-                                onNavigateBack = { activeNotebookId = null },
+                                onNavigateBack = {
+                                    activeNotebookId = null
+                                    currentScreen = ActiveScreen.BOOKSHELF
+                                },
                                 onSelectPage = { idx -> activePageIndex = idx },
                                 onCreatePage = { title, parentId ->
                                     coroutineScope.launch {
@@ -429,10 +418,7 @@ class MainActivity : ComponentActivity() {
                                         )
                                         launch(Dispatchers.IO) {
                                             try {
-                                                api.createPage(
-                                                    book.notebook.id,
-                                                    mapOf("id" to newPageId, "title" to title, "parentId" to parentId)
-                                                )
+                                                api.createPage(book.notebook.id, mapOf("id" to newPageId, "title" to title, "parentId" to parentId))
                                             } catch (_: Exception) {}
                                         }
                                     }
@@ -472,16 +458,12 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onDeleteCanvas = { canvasId ->
-                                    coroutineScope.launch {
-                                        db.dao().deleteCanvas(canvasId)
-                                    }
+                                    coroutineScope.launch { db.dao().deleteCanvas(canvasId) }
                                 },
                                 onUpdateCanvasPayload = { canvasId, payload ->
                                     coroutineScope.launch {
                                         val existing = book.canvases.find { it.id == canvasId }
-                                        if (existing != null) {
-                                            db.dao().upsertCanvas(existing.copy(payloadJson = payload))
-                                        }
+                                        if (existing != null) db.dao().upsertCanvas(existing.copy(payloadJson = payload))
                                     }
                                 },
                                 onAssignCanvasToPage = { canvasId ->
@@ -510,9 +492,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onDeleteQuestion = { qId ->
-                                    coroutineScope.launch {
-                                        db.dao().deleteQuestion(qId)
-                                    }
+                                    coroutineScope.launch { db.dao().deleteQuestion(qId) }
                                 },
                                 onOpenQuestionEditor = { question ->
                                     activeEditingQuestion = question
@@ -520,31 +500,47 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
-                }
 
-                if (showSettingsDialog) {
-                    AlertDialog(
-                        onDismissRequest = { showSettingsDialog = false },
-                        title = { Text("Profile & Settings", color = TextPrimary) },
-                        text = {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    text = "User: ${currentUser?.displayName ?: currentUser?.email ?: "Offline mode"}",
-                                    color = TextPrimary
-                                )
-                                Text(
-                                    text = "Base API: ${RemoteClient.BASE_URL}",
-                                    color = TextMuted
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            Button(onClick = { showSettingsDialog = false }) {
-                                Text("Close")
-                            }
-                        },
-                        containerColor = CosmicSlate
-                    )
+                    else -> {
+                        BookshelfScreen(
+                            notebooks = notebooks,
+                            shelves = shelves,
+                            allDetails = allDetails,
+                            currentUser = currentUser,
+                            selectedTagFilter = selectedTagFilter,
+                            onSelectTagFilter = { selectedTagFilter = it },
+                            onSignOut = { signOut() },
+                            onOpenNotebook = { id ->
+                                if (!openTabIds.contains(id)) {
+                                    openTabIds = openTabIds + id
+                                }
+                                activeNotebookId = id
+                                activePageIndex = 0
+                                currentScreen = ActiveScreen.WORKSPACE
+                            },
+                            onDeleteNotebook = { id ->
+                                coroutineScope.launch {
+                                    db.dao().deleteNotebook(id)
+                                    openTabIds = openTabIds - id
+                                    launch(Dispatchers.IO) {
+                                        try { api.deleteNote(id) } catch (_: Exception) {}
+                                    }
+                                }
+                            },
+                            onOpenAllTagsScreen = { currentScreen = ActiveScreen.ALL_TAGS },
+                            onOpenSettingsScreen = { currentScreen = ActiveScreen.SETTINGS },
+                            onOpenCreateNotebookScreen = { currentScreen = ActiveScreen.CREATE_NOTEBOOK },
+                            onDeleteShelf = { id ->
+                                coroutineScope.launch {
+                                    db.dao().deleteShelf(id)
+                                    launch(Dispatchers.IO) {
+                                        try { api.deleteShelf(id) } catch (_: Exception) {}
+                                    }
+                                }
+                            },
+                            onSyncWithRemote = { syncWithCloud() }
+                        )
+                    }
                 }
             }
         }

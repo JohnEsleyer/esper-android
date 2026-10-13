@@ -1,12 +1,8 @@
 package com.esper.android.ui.bookshelf
 
-import android.widget.Toast
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -16,30 +12,37 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.esper.android.data.export.ZipExporter
 import com.esper.android.data.local.NotebookWithDetails
 import com.esper.android.data.model.NotebookEntity
 import com.esper.android.data.model.ShelfEntity
 import com.esper.android.ui.components.BookCard
+import com.esper.android.ui.components.PullToRefreshLayout
 import com.esper.android.ui.theme.*
 import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.ceil
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,62 +51,70 @@ fun BookshelfScreen(
     shelves: List<ShelfEntity>,
     allDetails: List<NotebookWithDetails>,
     currentUser: FirebaseUser?,
+    selectedTagFilter: String,
+    onSelectTagFilter: (String) -> Unit,
     onSignOut: () -> Unit,
     onOpenNotebook: (String) -> Unit,
-    onCreateNotebook: (title: String, description: String, tags: String, preset: String, coverImage: String?) -> Unit,
     onDeleteNotebook: (String) -> Unit,
-    onCreateShelf: (title: String, description: String, color: String) -> Unit,
+    onOpenAllTagsScreen: () -> Unit,
+    onOpenSettingsScreen: () -> Unit,
+    onOpenCreateNotebookScreen: () -> Unit,
     onDeleteShelf: (String) -> Unit,
-    onSyncWithRemote: () -> Unit,
-    onUpdateDisplayName: (String) -> Unit = {}
+    onSyncWithRemote: () -> Unit
 ) {
-    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
 
     var searchQuery by remember { mutableStateOf("") }
-    var selectedTag by remember { mutableStateOf("All") }
     var selectedShelfId by remember { mutableStateOf<String?>(null) }
-    var showCreateBookDialog by remember { mutableStateOf(false) }
-    var showCreateShelfDialog by remember { mutableStateOf(false) }
-    var showAllTagsDialog by remember { mutableStateOf(false) }
-    var showSettingsDialog by remember { mutableStateOf(false) }
+    var isRefreshing by remember { mutableStateOf(false) }
 
-    var totalDragY by remember { mutableFloatStateOf(0f) }
-    var isSyncingAnimated by remember { mutableStateOf(false) }
-    val rotationAngle by animateFloatAsState(
-        targetValue = if (isSyncingAnimated) 720f else 0f,
-        animationSpec = tween(durationMillis = 800),
-        label = "syncRotation"
-    )
+    val pageSize = 6
+    var currentPage by remember { mutableIntStateOf(1) }
+    var pageInputText by remember { mutableStateOf("1") }
+    var isEditingPageNum by remember { mutableStateOf(false) }
 
-    var customTags by remember {
-        mutableStateOf(
-            listOf("Research", "Astrodynamics", "Physics", "Lectures", "Drafts")
-        )
+    // Books are strictly ordered latest to oldest
+    val sortedNotebooks = remember(notebooks) {
+        notebooks.sortedByDescending { it.updatedAt }
     }
 
-    val allTags = remember(notebooks, customTags) {
-        val extracted = notebooks.flatMap { it.tagsCsv.split(",") }
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-        listOf("All") + (customTags + extracted).distinct()
+    val filtered = remember(sortedNotebooks, selectedTagFilter, searchQuery, selectedShelfId, shelves) {
+        sortedNotebooks.filter { book ->
+            val tagMatches = selectedTagFilter == "All" || book.tagsCsv.contains(selectedTagFilter, ignoreCase = true)
+            val searchMatches = searchQuery.isBlank() || book.title.contains(searchQuery, ignoreCase = true)
+            val shelfMatches = selectedShelfId == null || shelves.find { it.id == selectedShelfId }?.notebookIdsCsv?.contains(book.id) == true
+            tagMatches && searchMatches && shelfMatches
+        }
     }
 
-    val filtered = notebooks.filter { book ->
-        val tagMatches = selectedTag == "All" || book.tagsCsv.contains(selectedTag, ignoreCase = true)
-        val searchMatches = searchQuery.isBlank() || book.title.contains(searchQuery, ignoreCase = true)
-        val shelfMatches = selectedShelfId == null || shelves.find { it.id == selectedShelfId }?.notebookIdsCsv?.contains(book.id) == true
-        tagMatches && searchMatches && shelfMatches
+    val totalPages = remember(filtered) {
+        maxOf(1, ceil(filtered.size.toDouble() / pageSize).toInt())
     }
 
-    fun triggerSwipeRefresh() {
-        if (!isSyncingAnimated) {
-            isSyncingAnimated = true
+    LaunchedEffect(totalPages) {
+        if (currentPage > totalPages) {
+            currentPage = totalPages
+            pageInputText = totalPages.toString()
+        }
+    }
+
+    LaunchedEffect(currentPage) {
+        pageInputText = currentPage.toString()
+    }
+
+    val pagedBooks = remember(filtered, currentPage) {
+        val startIndex = (currentPage - 1) * pageSize
+        filtered.drop(startIndex).take(pageSize)
+    }
+
+    fun triggerRefresh() {
+        if (!isRefreshing) {
+            isRefreshing = true
             onSyncWithRemote()
             coroutineScope.launch {
-                delay(800)
-                isSyncingAnimated = false
+                delay(900)
+                isRefreshing = false
             }
         }
     }
@@ -114,7 +125,7 @@ fun BookshelfScreen(
             ModalDrawerSheet(
                 drawerContainerColor = CosmicSlate,
                 drawerContentColor = TextPrimary,
-                modifier = Modifier.width(320.dp)
+                modifier = Modifier.width(310.dp)
             ) {
                 Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
                     Row(
@@ -123,7 +134,7 @@ fun BookshelfScreen(
                             .fillMaxWidth()
                             .padding(vertical = 12.dp)
                             .clickable {
-                                showSettingsDialog = true
+                                onOpenSettingsScreen()
                                 coroutineScope.launch { drawerState.close() }
                             }
                     ) {
@@ -150,7 +161,7 @@ fun BookshelfScreen(
                                 fontSize = 14.sp
                             )
                             Text(
-                                text = "Tap for Settings & Profile",
+                                text = "Settings & Workspace",
                                 color = TextMuted,
                                 fontSize = 11.sp
                             )
@@ -160,21 +171,13 @@ fun BookshelfScreen(
                     HorizontalDivider(color = BorderSlate, thickness = 1.dp)
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Shelves & Collections (${shelves.size})",
-                            color = IndigoGlow,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        )
-                        IconButton(onClick = { showCreateShelfDialog = true }) {
-                            Icon(Icons.Default.Add, contentDescription = "Add Shelf", tint = IndigoAccent)
-                        }
-                    }
+                    Text(
+                        text = "Shelves & Collections (${shelves.size})",
+                        color = IndigoGlow,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
 
                     LazyColumn(
                         modifier = Modifier.weight(1f),
@@ -269,24 +272,65 @@ fun BookshelfScreen(
             topBar = {
                 TopAppBar(
                     title = {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = { Text("Search notebooks, tags...", color = TextMuted, fontSize = 12.sp) },
-                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = TextMuted, modifier = Modifier.size(18.dp)) },
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = SpaceBlack,
-                                unfocusedContainerColor = SpaceBlack,
-                                focusedTextColor = TextPrimary,
-                                unfocusedTextColor = TextPrimary,
-                                focusedBorderColor = IndigoAccent,
-                                unfocusedBorderColor = BorderSlate
-                            ),
-                            shape = RoundedCornerShape(20.dp),
+                        Surface(
+                            shape = RoundedCornerShape(22.dp),
+                            color = SpaceBlack,
+                            border = BorderStroke(1.dp, BorderSlate),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(46.dp)
-                        )
+                                .height(40.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = "Search",
+                                    tint = TextMuted,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Box(
+                                    modifier = Modifier.weight(1f),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    if (searchQuery.isEmpty()) {
+                                        Text(
+                                            text = "Search notebooks, tags...",
+                                            color = TextMuted,
+                                            fontSize = 13.sp,
+                                            lineHeight = 18.sp
+                                        )
+                                    }
+                                    BasicTextField(
+                                        value = searchQuery,
+                                        onValueChange = {
+                                            searchQuery = it
+                                            currentPage = 1
+                                        },
+                                        singleLine = true,
+                                        textStyle = TextStyle(
+                                            color = TextPrimary,
+                                            fontSize = 13.sp,
+                                            lineHeight = 18.sp
+                                        ),
+                                        cursorBrush = SolidColor(IndigoAccent),
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(
+                                        onClick = { searchQuery = "" },
+                                        modifier = Modifier.size(20.dp)
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear", tint = TextMuted, modifier = Modifier.size(14.dp))
+                                    }
+                                }
+                            }
+                        }
                     },
                     navigationIcon = {
                         IconButton(onClick = { coroutineScope.launch { drawerState.open() } }) {
@@ -294,44 +338,194 @@ fun BookshelfScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = { showSettingsDialog = true }) {
+                        IconButton(onClick = onOpenSettingsScreen) {
                             Icon(Icons.Default.Settings, contentDescription = "Settings", tint = TextPrimary)
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
                 )
             },
-            floatingActionButton = {
-                FloatingActionButton(
-                    onClick = { showCreateBookDialog = true },
-                    containerColor = IndigoAccent,
-                    contentColor = TextPrimary
+            bottomBar = {
+                Surface(
+                    color = CosmicSlate,
+                    border = BorderStroke(1.dp, BorderSlate),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = "Add Book")
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FilledTonalIconButton(
+                                onClick = {
+                                    if (currentPage > 1) {
+                                        currentPage--
+                                    }
+                                },
+                                enabled = currentPage > 1,
+                                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                    containerColor = SurfaceSlate,
+                                    disabledContainerColor = CosmicSlate
+                                ),
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(Icons.Default.ChevronLeft, contentDescription = "Previous Page", tint = if (currentPage > 1) TextPrimary else TextMuted)
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Text("Page", color = TextMuted, fontSize = 12.sp)
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = SpaceBlack,
+                                    border = BorderStroke(1.dp, if (isEditingPageNum) IndigoAccent else BorderSlate),
+                                    modifier = Modifier.width(48.dp).height(30.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        BasicTextField(
+                                            value = pageInputText,
+                                            onValueChange = { input ->
+                                                val filteredInput = input.filter { it.isDigit() }.take(3)
+                                                pageInputText = filteredInput
+                                                isEditingPageNum = true
+                                            },
+                                            singleLine = true,
+                                            textStyle = TextStyle(
+                                                color = IndigoGlow,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                textAlign = TextAlign.Center
+                                            ),
+                                            keyboardOptions = KeyboardOptions(
+                                                keyboardType = KeyboardType.Number,
+                                                imeAction = ImeAction.Done
+                                            ),
+                                            keyboardActions = KeyboardActions(
+                                                onDone = {
+                                                    val num = pageInputText.toIntOrNull() ?: 1
+                                                    currentPage = num.coerceIn(1, totalPages)
+                                                    pageInputText = currentPage.toString()
+                                                    isEditingPageNum = false
+                                                }
+                                            ),
+                                            cursorBrush = SolidColor(IndigoAccent),
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("of $totalPages (${filtered.size} books)", color = TextMuted, fontSize = 12.sp)
+                            }
+
+                            FilledTonalIconButton(
+                                onClick = {
+                                    if (currentPage < totalPages) {
+                                        currentPage++
+                                    }
+                                },
+                                enabled = currentPage < totalPages,
+                                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                    containerColor = SurfaceSlate,
+                                    disabledContainerColor = CosmicSlate
+                                ),
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(Icons.Default.ChevronRight, contentDescription = "Next Page", tint = if (currentPage < totalPages) TextPrimary else TextMuted)
+                            }
+                        }
+
+                        HorizontalDivider(color = BorderSlate.copy(alpha = 0.5f), thickness = 1.dp)
+
+                        NavigationBar(
+                            containerColor = CosmicSlate,
+                            modifier = Modifier.height(60.dp)
+                        ) {
+                            NavigationBarItem(
+                                selected = selectedTagFilter == "All",
+                                onClick = { onSelectTagFilter("All") },
+                                icon = { Icon(Icons.Default.Book, contentDescription = "Library", modifier = Modifier.size(20.dp)) },
+                                label = { Text("Library", fontSize = 10.sp) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = TextPrimary,
+                                    indicatorColor = IndigoAccent,
+                                    unselectedIconColor = TextMuted,
+                                    unselectedTextColor = TextMuted
+                                )
+                            )
+
+                            NavigationBarItem(
+                                selected = false,
+                                onClick = onOpenAllTagsScreen,
+                                icon = { Icon(Icons.Default.Tag, contentDescription = "Tags", modifier = Modifier.size(20.dp)) },
+                                label = { Text("Tags", fontSize = 10.sp) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    unselectedIconColor = TextMuted,
+                                    unselectedTextColor = TextMuted
+                                )
+                            )
+
+                            NavigationBarItem(
+                                selected = false,
+                                onClick = onOpenCreateNotebookScreen,
+                                icon = {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(CircleShape)
+                                            .background(IndigoAccent),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = "New Book", tint = Color.White, modifier = Modifier.size(18.dp))
+                                    }
+                                },
+                                label = { Text("New Book", fontSize = 10.sp) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    unselectedIconColor = IndigoAccent,
+                                    unselectedTextColor = IndigoGlow
+                                )
+                            )
+
+                            NavigationBarItem(
+                                selected = false,
+                                onClick = onOpenSettingsScreen,
+                                icon = { Icon(Icons.Default.Settings, contentDescription = "Settings", modifier = Modifier.size(20.dp)) },
+                                label = { Text("Settings", fontSize = 10.sp) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    unselectedIconColor = TextMuted,
+                                    unselectedTextColor = TextMuted
+                                )
+                            )
+                        }
+                    }
                 }
             }
         ) { innerPadding ->
-            Box(
+            PullToRefreshLayout(
+                isRefreshing = isRefreshing,
+                onRefresh = { triggerRefresh() },
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
                     .background(SpaceBlack)
-                    .pointerInput(Unit) {
-                        detectDragGestures(
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                totalDragY += dragAmount.y
-                                if (totalDragY < -180f) {
-                                    triggerSwipeRefresh()
-                                    totalDragY = 0f
-                                }
-                            },
-                            onDragEnd = { totalDragY = 0f },
-                            onDragCancel = { totalDragY = 0f }
-                        )
-                    }
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
+                    val quickTags = remember(notebooks) {
+                        val extracted = notebooks.flatMap { it.tagsCsv.split(",") }
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .distinct()
+                            .take(6)
+                        listOf("All") + extracted
+                    }
+
                     LazyRow(
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -339,7 +533,7 @@ fun BookshelfScreen(
                     ) {
                         item {
                             Surface(
-                                onClick = { showAllTagsDialog = true },
+                                onClick = onOpenAllTagsScreen,
                                 shape = RoundedCornerShape(20.dp),
                                 color = SurfaceSlate,
                                 border = BorderStroke(1.dp, IndigoAccent.copy(alpha = 0.5f))
@@ -350,15 +544,15 @@ fun BookshelfScreen(
                                 ) {
                                     Icon(Icons.Default.Tag, contentDescription = null, tint = IndigoGlow, modifier = Modifier.size(13.dp))
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("All Tags (${allTags.size - 1})", color = IndigoGlow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Text("All Tags", color = IndigoGlow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
 
-                        items(allTags) { tag ->
-                            val isSelected = tag == selectedTag
+                        items(quickTags) { tag ->
+                            val isSelected = tag == selectedTagFilter
                             Surface(
-                                onClick = { selectedTag = tag },
+                                onClick = { onSelectTagFilter(tag) },
                                 shape = RoundedCornerShape(20.dp),
                                 color = if (isSelected) IndigoAccent else CosmicSlate
                             ) {
@@ -373,218 +567,39 @@ fun BookshelfScreen(
                         }
                     }
 
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
-                        contentPadding = PaddingValues(14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(filtered, key = { it.id }) { book ->
-                            BookCard(
-                                notebook = book,
-                                onClick = { onOpenNotebook(book.id) },
-                                onDelete = { onDeleteNotebook(book.id) }
-                            )
+                    if (pagedBooks.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, tint = TextMuted, modifier = Modifier.size(40.dp))
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Text("No notebooks found", color = TextSecondary, fontSize = 14.sp)
+                                Text("Pull down to refresh or tap + to create one", color = TextMuted, fontSize = 12.sp)
+                            }
                         }
-                    }
-                }
-
-                if (isSyncingAnimated) {
-                    Surface(
-                        shape = CircleShape,
-                        color = IndigoAccent,
-                        shadowElevation = 8.dp,
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 30.dp)
-                            .size(46.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                Icons.Default.Sync,
-                                contentDescription = "Syncing",
-                                tint = Color.White,
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .rotate(rotationAngle)
-                            )
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(2),
+                            contentPadding = PaddingValues(14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(pagedBooks, key = { it.id }) { book ->
+                                BookCard(
+                                    notebook = book,
+                                    onClick = { onOpenNotebook(book.id) },
+                                    onDelete = { onDeleteNotebook(book.id) }
+                                )
+                            }
                         }
                     }
                 }
             }
         }
-    }
-
-    if (showAllTagsDialog) {
-        AllTagsDialog(
-            allTags = allTags,
-            notebooks = notebooks,
-            selectedTag = selectedTag,
-            onSelectTag = { selectedTag = it },
-            onCreateTag = { newTag ->
-                if (!customTags.contains(newTag)) {
-                    customTags = customTags + newTag
-                }
-            },
-            onRenameTag = { oldTag, newTag ->
-                customTags = customTags.map { if (it == oldTag) newTag else it }
-                if (selectedTag == oldTag) selectedTag = newTag
-            },
-            onDeleteTag = { tag ->
-                customTags = customTags.filter { it != tag }
-                if (selectedTag == tag) selectedTag = "All"
-            },
-            onDismiss = { showAllTagsDialog = false }
-        )
-    }
-
-    if (showSettingsDialog) {
-        SettingsDialog(
-            currentUser = currentUser,
-            currentDisplayName = currentUser?.displayName ?: "Esper User",
-            notebookCount = notebooks.size,
-            shelfCount = shelves.size,
-            onUpdateDisplayName = { newName ->
-                onUpdateDisplayName(newName)
-                Toast.makeText(context, "Display name updated to: $newName", Toast.LENGTH_SHORT).show()
-            },
-            onExportZip = {
-                val fileName = ZipExporter.exportToDownloads(context, allDetails)
-                Toast.makeText(context, "Exported: $fileName", Toast.LENGTH_LONG).show()
-            },
-            onSignOut = onSignOut,
-            onDismiss = { showSettingsDialog = false }
-        )
-    }
-
-    if (showCreateBookDialog) {
-        var newTitle by remember { mutableStateOf("") }
-        var newDesc by remember { mutableStateOf("") }
-        var newTags by remember { mutableStateOf("") }
-        var newCoverImageUrl by remember { mutableStateOf("") }
-        var selectedPreset by remember { mutableStateOf("celestial") }
-
-        AlertDialog(
-            onDismissRequest = { showCreateBookDialog = false },
-            title = { Text("Create New Notebook", color = TextPrimary) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = newTitle,
-                        onValueChange = { newTitle = it },
-                        label = { Text("Notebook Title") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = newDesc,
-                        onValueChange = { newDesc = it },
-                        label = { Text("Description") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = newTags,
-                        onValueChange = { newTags = it },
-                        label = { Text("Tags (comma-separated)") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = newCoverImageUrl,
-                        onValueChange = { newCoverImageUrl = it },
-                        label = { Text("Book Cover Image URL (optional)") },
-                        placeholder = { Text("https://example.com/cover.jpg") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("celestial", "quantum", "solar").forEach { p ->
-                            FilterChip(
-                                selected = selectedPreset == p,
-                                onClick = { selectedPreset = p },
-                                label = { Text(p.replaceFirstChar { it.uppercase() }) }
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (newTitle.isNotBlank()) {
-                            onCreateNotebook(
-                                newTitle.trim(),
-                                newDesc.trim(),
-                                newTags.trim(),
-                                selectedPreset,
-                                newCoverImageUrl.trim().ifBlank { null }
-                            )
-                            showCreateBookDialog = false
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = IndigoAccent)
-                ) {
-                    Text("Create")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateBookDialog = false }) { Text("Cancel", color = TextSecondary) }
-            },
-            containerColor = CosmicSlate
-        )
-    }
-
-    if (showCreateShelfDialog) {
-        var shelfTitle by remember { mutableStateOf("") }
-        var shelfDesc by remember { mutableStateOf("") }
-        var selectedColor by remember { mutableStateOf("#6366F1") }
-
-        AlertDialog(
-            onDismissRequest = { showCreateShelfDialog = false },
-            title = { Text("Create Shelf Collection", color = TextPrimary) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = shelfTitle,
-                        onValueChange = { shelfTitle = it },
-                        label = { Text("Shelf Title") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = shelfDesc,
-                        onValueChange = { shelfDesc = it },
-                        label = { Text("Description") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text("Color Code:", fontSize = 12.sp, color = TextMuted)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("#6366F1", "#10B981", "#F59E0B", "#F43F5E", "#8B5CF6", "#06B6D4").forEach { hex ->
-                            Box(
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(android.graphics.Color.parseColor(hex)))
-                                    .clickable { selectedColor = hex }
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (shelfTitle.isNotBlank()) {
-                            onCreateShelf(shelfTitle.trim(), shelfDesc.trim(), selectedColor)
-                            showCreateShelfDialog = false
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = IndigoAccent)
-                ) {
-                    Text("Create")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateShelfDialog = false }) { Text("Cancel", color = TextSecondary) }
-            },
-            containerColor = CosmicSlate
-        )
     }
 }

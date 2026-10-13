@@ -25,9 +25,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.esper.android.data.model.CanvasEntity
 import com.esper.android.data.model.NotebookEntity
@@ -85,14 +86,9 @@ fun WorkspaceScreen(
     var isQuestionsSheetOpen by remember { mutableStateOf(false) }
     var isAttachmentsSheetOpen by remember { mutableStateOf(false) }
     var showHtmlCodeEditor by remember { mutableStateOf(false) }
-    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
-    var showEditYouTubeDialog by remember { mutableStateOf(false) }
-    var editYouTubeUrlBuffer by remember { mutableStateOf("") }
 
     val activePage = pages.getOrNull(activePageIndex)
 
-    // A canvas is attached only if its assignedPagesCsv contains activePage.id.
-    // Pages without an attachment render the editor at full height (no split).
     val attachedCanvas = remember(canvases, activePage?.id) {
         activePage?.let { page ->
             canvases.firstOrNull { c ->
@@ -109,10 +105,10 @@ fun WorkspaceScreen(
     LaunchedEffect(activePageIndex, hasAttachment) {
         isEditorReady = false
         isAttachmentReady = false
-        delay(400)
+        delay(350)
         isEditorReady = true
         if (hasAttachment) {
-            delay(400)
+            delay(350)
             isAttachmentReady = true
         }
     }
@@ -135,258 +131,98 @@ fun WorkspaceScreen(
             )
         }
     ) {
-        ModalNavigationDrawer(
-            drawerState = rightTabsDrawerState,
-            drawerContent = {
-                TabsDrawerContent(
-                    openNotebooks = openNotebooks,
-                    activeNotebookId = activeNotebookId,
-                    onSelectTab = { id ->
-                        coroutineScope.launch { rightTabsDrawerState.close() }
-                        onSelectTab(id)
-                    },
-                    onCloseTab = onCloseTab,
-                    onCloseAllTabs = onCloseAllTabs
-                )
-            }
-        ) {
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = {
-                            Column {
-                                Text(notebookTitle, style = MaterialTheme.typography.titleSmall, maxLines = 1, color = TextPrimary)
-                                activePage?.let { page ->
-                                    Text(
-                                        text = "${activePageIndex + 1}. ${page.title}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = IndigoGlow,
-                                        maxLines = 1
-                                    )
-                                }
-                            }
-                        },
-                        navigationIcon = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = onNavigateBack) {
-                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
-                                }
-                                IconButton(onClick = { coroutineScope.launch { leftChaptersDrawerState.open() } }) {
-                                    Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = "Chapters Menu", tint = IndigoGlow)
-                                }
-                            }
-                        },
-                        actions = {
-                            IconButton(onClick = { isAttachmentsSheetOpen = true }) {
-                                Icon(Icons.Default.Attachment, contentDescription = "Attachments", tint = EmeraldSync)
-                            }
-                            IconButton(onClick = { isQuestionsSheetOpen = true }) {
-                                Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "Questions", tint = AmberGlow)
-                            }
-                            IconButton(onClick = { isCommentsSheetOpen = true }) {
-                                Icon(Icons.Default.ChatBubbleOutline, contentDescription = "Discussion", tint = IndigoGlow)
-                            }
-                            IconButton(onClick = { coroutineScope.launch { rightTabsDrawerState.open() } }) {
-                                Icon(Icons.Default.Layers, contentDescription = "Tabs", tint = ElectricViolet)
-                            }
-                            if (hasAttachment) {
-                                IconButton(onClick = {
-                                    viewportMode = when (viewportMode) {
-                                        ViewportMode.SPLIT -> ViewportMode.ATTACHMENT_FULL
-                                        ViewportMode.ATTACHMENT_FULL -> ViewportMode.EDITOR_FULL
-                                        ViewportMode.EDITOR_FULL -> ViewportMode.SPLIT
-                                    }
-                                }) {
-                                    val icon = when (viewportMode) {
-                                        ViewportMode.SPLIT -> Icons.Default.ViewAgenda
-                                        ViewportMode.ATTACHMENT_FULL -> Icons.Default.Fullscreen
-                                        ViewportMode.EDITOR_FULL -> Icons.Default.EditNote
-                                    }
-                                    Icon(icon, contentDescription = "Viewport Mode", tint = TextPrimary)
-                                }
-                            }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
-                    )
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            ModalNavigationDrawer(
+                drawerState = rightTabsDrawerState,
+                drawerContent = {
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        TabsDrawerContent(
+                            openNotebooks = openNotebooks,
+                            activeNotebookId = activeNotebookId,
+                            onSelectTab = { id ->
+                                coroutineScope.launch { rightTabsDrawerState.close() }
+                                onSelectTab(id)
+                            },
+                            onCloseTab = onCloseTab,
+                            onCloseAllTabs = onCloseAllTabs
+                        )
+                    }
                 }
-            ) { innerPadding ->
-                BoxWithConstraints(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                        .background(SpaceBlack)
-                ) {
-                    val totalHeight = maxHeight
-                    val density = LocalDensity.current
-
-                    if (!hasAttachment) {
-                        Box(
+            ) {
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    Scaffold(
+                        topBar = {
+                            TopAppBar(
+                                title = {
+                                    Column {
+                                        Text(notebookTitle, style = MaterialTheme.typography.titleSmall, maxLines = 1, color = TextPrimary)
+                                        activePage?.let { page ->
+                                            Text(
+                                                text = "${activePageIndex + 1}. ${page.title}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = IndigoGlow,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                },
+                                navigationIcon = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(onClick = onNavigateBack) {
+                                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
+                                        }
+                                        IconButton(onClick = { coroutineScope.launch { leftChaptersDrawerState.open() } }) {
+                                            Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = "Chapters Sidebar", tint = IndigoGlow)
+                                        }
+                                    }
+                                },
+                                actions = {
+                                    IconButton(onClick = { isAttachmentsSheetOpen = true }) {
+                                        Icon(Icons.Default.Attachment, contentDescription = "Attachments", tint = EmeraldSync)
+                                    }
+                                    IconButton(onClick = { isQuestionsSheetOpen = true }) {
+                                        Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "Questions", tint = AmberGlow)
+                                    }
+                                    IconButton(onClick = { isCommentsSheetOpen = true }) {
+                                        Icon(Icons.Default.ChatBubbleOutline, contentDescription = "Discussion", tint = IndigoGlow)
+                                    }
+                                    IconButton(onClick = { coroutineScope.launch { rightTabsDrawerState.open() } }) {
+                                        Icon(Icons.Default.Layers, contentDescription = "Tabs Sidebar", tint = ElectricViolet)
+                                    }
+                                    if (hasAttachment) {
+                                        IconButton(onClick = {
+                                            viewportMode = when (viewportMode) {
+                                                ViewportMode.SPLIT -> ViewportMode.ATTACHMENT_FULL
+                                                ViewportMode.ATTACHMENT_FULL -> ViewportMode.EDITOR_FULL
+                                                ViewportMode.EDITOR_FULL -> ViewportMode.SPLIT
+                                            }
+                                        }) {
+                                            val icon = when (viewportMode) {
+                                                ViewportMode.SPLIT -> Icons.Default.ViewAgenda
+                                                ViewportMode.ATTACHMENT_FULL -> Icons.Default.Fullscreen
+                                                ViewportMode.EDITOR_FULL -> Icons.Default.EditNote
+                                            }
+                                            Icon(icon, contentDescription = "Viewport Mode", tint = TextPrimary)
+                                        }
+                                    }
+                                },
+                                colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
+                            )
+                        }
+                    ) { innerPadding ->
+                        BoxWithConstraints(
                             modifier = Modifier
                                 .fillMaxSize()
+                                .padding(innerPadding)
                                 .background(SpaceBlack)
                         ) {
-                            if (!isEditorReady) {
-                                EditorSkeleton()
-                            } else {
-                                activePage?.let { page ->
-                                    ComposeLexicalEditor(
-                                        initialMarkdown = page.notes,
-                                        onContentChanged = { updatedNotes ->
-                                            onSaveNotes(page.id, updatedNotes)
-                                        },
-                                        onTimestampClicked = { seconds ->
-                                            Toast.makeText(context, "Timestamp: ${seconds}s", Toast.LENGTH_SHORT).show()
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            if (viewportMode != ViewportMode.EDITOR_FULL) {
-                                val simHeight = if (viewportMode == ViewportMode.ATTACHMENT_FULL) totalHeight else totalHeight * splitRatio
+                            val totalHeight = maxHeight
+                            val density = LocalDensity.current
+
+                            if (!hasAttachment) {
                                 Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(simHeight)
-                                        .background(Color.Black)
-                                ) {
-                                    val canvas = attachedCanvas
-                                    if (isDraggingSplitter || !isAttachmentReady || canvas == null) {
-                                        SimulationSkeleton(label = "Rendering ${canvas?.title ?: "attachment"}...")
-                                    } else {
-                                        AndroidView(
-                                            factory = { ctx ->
-                                                WebView(ctx).apply {
-                                                    layoutParams = ViewGroup.LayoutParams(
-                                                        ViewGroup.LayoutParams.MATCH_PARENT,
-                                                        ViewGroup.LayoutParams.MATCH_PARENT
-                                                    )
-                                                    @SuppressLint("SetJavaScriptEnabled")
-                                                    settings.apply {
-                                                        javaScriptEnabled = true
-                                                        domStorageEnabled = true
-                                                        allowFileAccess = true
-                                                        allowContentAccess = true
-                                                        databaseEnabled = true
-                                                        loadWithOverviewMode = true
-                                                        useWideViewPort = true
-                                                    }
-                                                    webChromeClient = WebChromeClient()
-                                                    webViewClient = WebViewClient()
-
-                                                    if (canvas.kind == "youtube") {
-                                                        val ytId = extractYouTubeId(canvas.payloadJson)
-                                                        loadUrl("https://www.youtube.com/embed/$ytId?enablejsapi=1")
-                                                    } else {
-                                                        loadDataWithBaseURL("https://localhost/", canvas.payloadJson, "text/html", "UTF-8", null)
-                                                    }
-                                                    simWebView = this
-                                                }
-                                            },
-                                            update = { wv ->
-                                                if (canvas.kind == "youtube") {
-                                                    val ytId = extractYouTubeId(canvas.payloadJson)
-                                                    wv.loadUrl("https://www.youtube.com/embed/$ytId?enablejsapi=1")
-                                                } else {
-                                                    wv.loadDataWithBaseURL("https://localhost/", canvas.payloadJson, "text/html", "UTF-8", null)
-                                                }
-                                            },
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    }
-
-                                    Row(
-                                        modifier = Modifier
-                                            .align(Alignment.TopEnd)
-                                            .padding(10.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Surface(
-                                            shape = CircleShape,
-                                            color = Color.Black.copy(alpha = 0.75f),
-                                            border = BorderStroke(1.dp, BorderSlate),
-                                            shadowElevation = 6.dp
-                                        ) {
-                                            IconButton(
-                                                onClick = {
-                                                    if (attachedCanvas?.kind == "html") {
-                                                        showHtmlCodeEditor = true
-                                                    } else {
-                                                        editYouTubeUrlBuffer = attachedCanvas?.payloadJson ?: ""
-                                                        showEditYouTubeDialog = true
-                                                    }
-                                                },
-                                                modifier = Modifier.size(34.dp)
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.Edit,
-                                                    contentDescription = "Edit Attachment",
-                                                    tint = IndigoGlow,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                        }
-
-                                        Surface(
-                                            shape = CircleShape,
-                                            color = Color.Black.copy(alpha = 0.75f),
-                                            border = BorderStroke(1.dp, BorderSlate),
-                                            shadowElevation = 6.dp
-                                        ) {
-                                            IconButton(
-                                                onClick = { showDeleteConfirmDialog = true },
-                                                modifier = Modifier.size(34.dp)
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.Delete,
-                                                    contentDescription = "Delete Attachment",
-                                                    tint = RoseRuby,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (viewportMode == ViewportMode.SPLIT) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(20.dp)
-                                        .background(if (isDraggingSplitter) IndigoAccent.copy(alpha = 0.35f) else CosmicSlate)
-                                        .pointerInput(Unit) {
-                                            detectDragGestures(
-                                                onDragStart = { isDraggingSplitter = true },
-                                                onDragEnd = { isDraggingSplitter = false },
-                                                onDragCancel = { isDraggingSplitter = false },
-                                                onDrag = { change, dragAmount ->
-                                                    change.consume()
-                                                    val delta = dragAmount.y / with(density) { totalHeight.toPx() }
-                                                    splitRatio = (splitRatio + delta).coerceIn(0.15f, 0.85f)
-                                                }
-                                            )
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .width(48.dp)
-                                            .height(4.dp)
-                                            .background(
-                                                if (isDraggingSplitter) IndigoAccent else BorderSlate,
-                                                RoundedCornerShape(2.dp)
-                                            )
-                                    )
-                                }
-                            }
-
-                            if (viewportMode != ViewportMode.ATTACHMENT_FULL) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f)
+                                        .fillMaxSize()
                                         .background(SpaceBlack)
                                 ) {
                                     if (!isEditorReady) {
@@ -399,140 +235,227 @@ fun WorkspaceScreen(
                                                     onSaveNotes(page.id, updatedNotes)
                                                 },
                                                 onTimestampClicked = { seconds ->
-                                                    Toast.makeText(context, "Seeking companion to ${seconds}s", Toast.LENGTH_SHORT).show()
-                                                    simWebView?.evaluateJavascript(
-                                                        "if (window.seekTo) { window.seekTo($seconds); }",
-                                                        null
-                                                    )
+                                                    Toast.makeText(context, "Timestamp: ${seconds}s", Toast.LENGTH_SHORT).show()
                                                 }
                                             )
                                         }
                                     }
                                 }
+                            } else {
+                                Column(modifier = Modifier.fillMaxSize()) {
+                                    if (viewportMode != ViewportMode.EDITOR_FULL) {
+                                        val simHeight = if (viewportMode == ViewportMode.ATTACHMENT_FULL) totalHeight else totalHeight * splitRatio
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(simHeight)
+                                                .background(Color.Black)
+                                        ) {
+                                            val canvas = attachedCanvas
+                                            if (isDraggingSplitter || !isAttachmentReady || canvas == null) {
+                                                SimulationSkeleton(label = "Rendering ${canvas?.title ?: "attachment"}...")
+                                            } else {
+                                                AndroidView(
+                                                    factory = { ctx ->
+                                                        WebView(ctx).apply {
+                                                            layoutParams = ViewGroup.LayoutParams(
+                                                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                                                ViewGroup.LayoutParams.MATCH_PARENT
+                                                            )
+                                                            @SuppressLint("SetJavaScriptEnabled")
+                                                            settings.apply {
+                                                                javaScriptEnabled = true
+                                                                domStorageEnabled = true
+                                                                allowFileAccess = true
+                                                                allowContentAccess = true
+                                                                databaseEnabled = true
+                                                                loadWithOverviewMode = true
+                                                                useWideViewPort = true
+                                                            }
+                                                            webChromeClient = WebChromeClient()
+                                                            webViewClient = WebViewClient()
+
+                                                            if (canvas.kind == "youtube") {
+                                                                val ytId = extractYouTubeId(canvas.payloadJson)
+                                                                loadUrl("https://www.youtube.com/embed/$ytId?enablejsapi=1")
+                                                            } else {
+                                                                loadDataWithBaseURL("https://localhost/", canvas.payloadJson, "text/html", "UTF-8", null)
+                                                            }
+                                                            simWebView = this
+                                                        }
+                                                    },
+                                                    update = { wv ->
+                                                        if (canvas.kind == "youtube") {
+                                                            val ytId = extractYouTubeId(canvas.payloadJson)
+                                                            wv.loadUrl("https://www.youtube.com/embed/$ytId?enablejsapi=1")
+                                                        } else {
+                                                            wv.loadDataWithBaseURL("https://localhost/", canvas.payloadJson, "text/html", "UTF-8", null)
+                                                        }
+                                                    },
+                                                    modifier = Modifier.fillMaxSize()
+                                                )
+                                            }
+
+                                            Row(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .padding(10.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                if (attachedCanvas?.kind == "html") {
+                                                    Surface(
+                                                        shape = CircleShape,
+                                                        color = Color.Black.copy(alpha = 0.75f),
+                                                        border = BorderStroke(1.dp, BorderSlate),
+                                                        shadowElevation = 6.dp
+                                                    ) {
+                                                        IconButton(
+                                                            onClick = { showHtmlCodeEditor = true },
+                                                            modifier = Modifier.size(34.dp)
+                                                        ) {
+                                                            Icon(Icons.Default.Edit, contentDescription = "Edit HTML", tint = IndigoGlow, modifier = Modifier.size(16.dp))
+                                                        }
+                                                    }
+                                                }
+
+                                                Surface(
+                                                    shape = CircleShape,
+                                                    color = Color.Black.copy(alpha = 0.75f),
+                                                    border = BorderStroke(1.dp, BorderSlate),
+                                                    shadowElevation = 6.dp
+                                                ) {
+                                                    IconButton(
+                                                        onClick = {
+                                                            attachedCanvas?.let { onDeleteCanvas(it.id) }
+                                                        },
+                                                        modifier = Modifier.size(34.dp)
+                                                    ) {
+                                                        Icon(Icons.Default.Delete, contentDescription = "Delete Attachment", tint = RoseRuby, modifier = Modifier.size(16.dp))
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if (viewportMode == ViewportMode.SPLIT) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(20.dp)
+                                                .background(if (isDraggingSplitter) IndigoAccent.copy(alpha = 0.35f) else CosmicSlate)
+                                                .pointerInput(Unit) {
+                                                    detectDragGestures(
+                                                        onDragStart = { isDraggingSplitter = true },
+                                                        onDragEnd = { isDraggingSplitter = false },
+                                                        onDragCancel = { isDraggingSplitter = false },
+                                                        onDrag = { change, dragAmount ->
+                                                            change.consume()
+                                                            val delta = dragAmount.y / with(density) { totalHeight.toPx() }
+                                                            splitRatio = (splitRatio + delta).coerceIn(0.15f, 0.85f)
+                                                        }
+                                                    )
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .width(48.dp)
+                                                    .height(4.dp)
+                                                    .background(
+                                                        if (isDraggingSplitter) IndigoAccent else BorderSlate,
+                                                        RoundedCornerShape(2.dp)
+                                                    )
+                                            )
+                                        }
+                                    }
+
+                                    if (viewportMode != ViewportMode.ATTACHMENT_FULL) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .weight(1f)
+                                                .background(SpaceBlack)
+                                        ) {
+                                            if (!isEditorReady) {
+                                                EditorSkeleton()
+                                            } else {
+                                                activePage?.let { page ->
+                                                    ComposeLexicalEditor(
+                                                        initialMarkdown = page.notes,
+                                                        onContentChanged = { updatedNotes ->
+                                                            onSaveNotes(page.id, updatedNotes)
+                                                        },
+                                                        onTimestampClicked = { seconds ->
+                                                            Toast.makeText(context, "Seeking to ${seconds}s", Toast.LENGTH_SHORT).show()
+                                                            simWebView?.evaluateJavascript(
+                                                                "if (window.seekTo) { window.seekTo($seconds); }",
+                                                                null
+                                                            )
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
-                    }
-                }
 
-                if (showDeleteConfirmDialog && attachedCanvas != null) {
-                    AlertDialog(
-                        onDismissRequest = { showDeleteConfirmDialog = false },
-                        title = { Text("Delete Attachment", color = TextPrimary) },
-                        text = {
-                            Text(
-                                "Are you sure you want to remove the companion attachment '${attachedCanvas?.title}' from this chapter?",
-                                color = TextSecondary,
-                                fontSize = 13.sp
-                            )
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    attachedCanvas?.let { onDeleteCanvas(it.id) }
-                                    showDeleteConfirmDialog = false
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = RoseRuby)
-                            ) {
-                                Text("Delete")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { showDeleteConfirmDialog = false }) {
-                                Text("Cancel", color = TextSecondary)
-                            }
-                        },
-                        containerColor = CosmicSlate
-                    )
-                }
-
-                if (showEditYouTubeDialog && attachedCanvas != null) {
-                    AlertDialog(
-                        onDismissRequest = { showEditYouTubeDialog = false },
-                        title = { Text("Edit YouTube URL", color = TextPrimary) },
-                        text = {
-                            OutlinedTextField(
-                                value = editYouTubeUrlBuffer,
-                                onValueChange = { editYouTubeUrlBuffer = it },
-                                label = { Text("YouTube URL") },
-                                placeholder = { Text("https://www.youtube.com/watch?v=...") },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    if (editYouTubeUrlBuffer.isNotBlank()) {
-                                        attachedCanvas?.let { onUpdateCanvasPayload(it.id, editYouTubeUrlBuffer.trim()) }
-                                        showEditYouTubeDialog = false
+                        if (isAttachmentsSheetOpen) {
+                            val selectedIdx = canvases.indexOf(attachedCanvas).coerceAtLeast(0)
+                            AttachmentsBottomSheet(
+                                canvases = canvases,
+                                selectedIndex = if (canvases.isEmpty()) 0 else selectedIdx,
+                                onSelectCanvas = { idx ->
+                                    val c = canvases.getOrNull(idx)
+                                    if (c != null) {
+                                        onAssignCanvasToPage(c.id)
+                                        isAttachmentsSheetOpen = false
                                     }
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldSync)
-                            ) {
-                                Text("Save")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { showEditYouTubeDialog = false }) {
-                                Text("Cancel", color = TextSecondary)
-                            }
-                        },
-                        containerColor = CosmicSlate
-                    )
-                }
-
-                if (isAttachmentsSheetOpen) {
-                    val selectedIdx = canvases.indexOf(attachedCanvas).coerceAtLeast(0)
-                    AttachmentsBottomSheet(
-                        canvases = canvases,
-                        selectedIndex = if (canvases.isEmpty()) 0 else selectedIdx,
-                        onSelectCanvas = { idx ->
-                            val c = canvases.getOrNull(idx)
-                            if (c != null) {
-                                onAssignCanvasToPage(c.id)
-                                isAttachmentsSheetOpen = false
-                            }
-                        },
-                        onAddAttachment = { title, kind, payload ->
-                            onAttachCanvas(title, kind, payload)
-                        },
-                        onDeleteAttachment = onDeleteCanvas,
-                        onDismiss = { isAttachmentsSheetOpen = false }
-                    )
-                }
-
-                if (isQuestionsSheetOpen) {
-                    QuestionsBottomSheet(
-                        questions = questions,
-                        onDismiss = { isQuestionsSheetOpen = false },
-                        onCreateQuestion = onCreateQuestion,
-                        onDeleteQuestion = onDeleteQuestion,
-                        onOpenQuestionEditor = { q ->
-                            isQuestionsSheetOpen = false
-                            onOpenQuestionEditor(q)
+                                onAddAttachment = { title, kind, payload ->
+                                    onAttachCanvas(title, kind, payload)
+                                },
+                                onDeleteAttachment = onDeleteCanvas,
+                                onDismiss = { isAttachmentsSheetOpen = false }
+                            )
                         }
-                    )
-                }
 
-                if (isCommentsSheetOpen) {
-                    CommentsBottomSheet(
-                        chapterTitle = activePage?.title ?: "Chapter",
-                        onDismiss = { isCommentsSheetOpen = false }
-                    )
-                }
+                        if (isQuestionsSheetOpen) {
+                            QuestionsBottomSheet(
+                                questions = questions,
+                                onDismiss = { isQuestionsSheetOpen = false },
+                                onCreateQuestion = onCreateQuestion,
+                                onDeleteQuestion = onDeleteQuestion,
+                                onOpenQuestionEditor = { q ->
+                                    isQuestionsSheetOpen = false
+                                    onOpenQuestionEditor(q)
+                                }
+                            )
+                        }
 
-                if (showHtmlCodeEditor && attachedCanvas != null) {
-                    HtmlCodeEditorScreen(
-                        title = attachedCanvas?.title ?: "HTML",
-                        initialCode = attachedCanvas?.payloadJson?.ifBlank {
-                            "<!DOCTYPE html>\n<html>\n<head>\n  <style>body { background: #020617; color: #818cf8; }</style>\n</head>\n<body>\n  <h1>Custom Simulation</h1>\n</body>\n</html>"
-                        } ?: "",
-                        onSaveAndRun = { newCode ->
-                            attachedCanvas?.let { onUpdateCanvasPayload(it.id, newCode) }
-                            simWebView?.loadDataWithBaseURL("https://localhost/", newCode, "text/html", "UTF-8", null)
-                            showHtmlCodeEditor = false
-                        },
-                        onDismiss = { showHtmlCodeEditor = false }
-                    )
+                        if (isCommentsSheetOpen) {
+                            CommentsBottomSheet(
+                                chapterTitle = activePage?.title ?: "Chapter",
+                                onDismiss = { isCommentsSheetOpen = false }
+                            )
+                        }
+
+                        if (showHtmlCodeEditor && attachedCanvas != null) {
+                            HtmlCodeEditorScreen(
+                                title = attachedCanvas?.title ?: "HTML",
+                                initialCode = attachedCanvas?.payloadJson?.ifBlank {
+                                    "<!DOCTYPE html>\n<html>\n<head>\n  <style>body { background: #020617; color: #818cf8; }</style>\n</head>\n<body>\n  <h1>Simulation</h1>\n</body>\n</html>"
+                                } ?: "",
+                                onSaveAndRun = { newCode ->
+                                    attachedCanvas?.let { onUpdateCanvasPayload(it.id, newCode) }
+                                    simWebView?.loadDataWithBaseURL("https://localhost/", newCode, "text/html", "UTF-8", null)
+                                    showHtmlCodeEditor = false
+                                },
+                                onDismiss = { showHtmlCodeEditor = false }
+                            )
+                        }
+                    }
                 }
             }
         }
