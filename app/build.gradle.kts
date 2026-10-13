@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -10,7 +11,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.esper.android"
+        applicationId = "com.johnesleyer.esper"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -66,4 +67,10 @@ dependencies {
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
+
+    // Firebase BoM and Auth
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.analytics)
+    implementation(libs.play.services.auth)
 }

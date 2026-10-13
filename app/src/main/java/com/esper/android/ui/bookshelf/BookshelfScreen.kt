@@ -1,6 +1,7 @@
 package com.esper.android.ui.bookshelf
 
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -31,6 +32,7 @@ import com.esper.android.data.model.NotebookEntity
 import com.esper.android.data.model.ShelfEntity
 import com.esper.android.ui.components.BookCard
 import com.esper.android.ui.theme.*
+import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -39,15 +41,15 @@ fun BookshelfScreen(
     notebooks: List<NotebookEntity>,
     shelves: List<ShelfEntity>,
     allDetails: List<NotebookWithDetails>,
-    isOfflineMode: Boolean,
+    currentUser: FirebaseUser?,
+    onSignInWithGoogle: () -> Unit,
+    onSignOut: () -> Unit,
     onOpenNotebook: (String) -> Unit,
     onCreateNotebook: (title: String, description: String, tags: String, preset: String, coverImage: String?) -> Unit,
     onDeleteNotebook: (String) -> Unit,
     onCreateShelf: (title: String, description: String, color: String) -> Unit,
     onDeleteShelf: (String) -> Unit,
-    onSyncWithRemote: () -> Unit,
-    onLogout: () -> Unit,
-    onOpenSettings: () -> Unit
+    onSyncWithRemote: () -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -59,7 +61,8 @@ fun BookshelfScreen(
     var showCreateBookDialog by remember { mutableStateOf(false) }
     var showCreateShelfDialog by remember { mutableStateOf(false) }
 
-    // Dynamic Tag extraction
+    val isSignedIn = currentUser != null
+
     val allTags = remember(notebooks) {
         val extracted = notebooks.flatMap { it.tagsCsv.split(",") }
             .map { it.trim() }
@@ -75,7 +78,6 @@ fun BookshelfScreen(
         tagMatches && searchMatches && shelfMatches
     }
 
-    // Modal Drawer for Shelves on swiping left
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -85,7 +87,6 @@ fun BookshelfScreen(
                 modifier = Modifier.width(320.dp)
             ) {
                 Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                    // User Header
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -96,11 +97,13 @@ fun BookshelfScreen(
                             modifier = Modifier
                                 .size(44.dp)
                                 .clip(CircleShape)
-                                .background(if (isOfflineMode) TextMuted else IndigoAccent),
+                                .background(if (isSignedIn) IndigoAccent else TextMuted),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = if (isOfflineMode) "OF" else "ES",
+                                text = if (isSignedIn) {
+                                    (currentUser?.displayName?.firstOrNull() ?: currentUser?.email?.firstOrNull() ?: "E").toString().uppercase()
+                                } else "OF",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 16.sp
@@ -109,14 +112,14 @@ fun BookshelfScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = if (isOfflineMode) "Offline Workspace" else "Esper Member",
+                                text = currentUser?.displayName ?: currentUser?.email ?: "Offline Workspace",
                                 color = TextPrimary,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
                             )
                             Text(
-                                text = if (isOfflineMode) "Local-only storage" else "Live Cloud Sync Active",
-                                color = if (isOfflineMode) TextMuted else EmeraldSync,
+                                text = if (isSignedIn) "Live Cloud Sync Active" else "Local-only storage — sign in to sync",
+                                color = if (isSignedIn) EmeraldSync else TextMuted,
                                 fontSize = 11.sp
                             )
                         }
@@ -125,7 +128,6 @@ fun BookshelfScreen(
                     HorizontalDivider(color = BorderSlate, thickness = 1.dp)
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Shelves Section Header
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -142,7 +144,6 @@ fun BookshelfScreen(
                         }
                     }
 
-                    // Shelf List with color code dots
                     LazyColumn(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -221,21 +222,23 @@ fun BookshelfScreen(
                     HorizontalDivider(color = BorderSlate, thickness = 1.dp)
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Settings & Logout Bottom Actions
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.Default.Settings, contentDescription = null, tint = TextSecondary) },
-                        label = { Text("Settings & Quotas", color = TextPrimary) },
-                        selected = false,
-                        onClick = onOpenSettings,
-                        colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
-                    )
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, tint = RoseRuby) },
-                        label = { Text(if (isOfflineMode) "Exit Offline Mode" else "Logout", color = RoseRuby) },
-                        selected = false,
-                        onClick = onLogout,
-                        colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
-                    )
+                    if (isSignedIn) {
+                        NavigationDrawerItem(
+                            icon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, tint = RoseRuby) },
+                            label = { Text("Sign out", color = RoseRuby) },
+                            selected = false,
+                            onClick = onSignOut,
+                            colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
+                        )
+                    } else {
+                        NavigationDrawerItem(
+                            icon = { Icon(Icons.Default.Login, contentDescription = null, tint = EmeraldSync) },
+                            label = { Text("Sign in with Google", color = TextPrimary) },
+                            selected = false,
+                            onClick = onSignInWithGoogle,
+                            colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
+                        )
+                    }
                 }
             }
         }
@@ -249,11 +252,11 @@ fun BookshelfScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
-                                color = if (isOfflineMode) SurfaceSlate else IndigoAccent.copy(alpha = 0.2f)
+                                color = if (isSignedIn) IndigoAccent.copy(alpha = 0.2f) else SurfaceSlate
                             ) {
                                 Text(
-                                    text = if (isOfflineMode) "Offline" else "Live Cloud",
-                                    color = if (isOfflineMode) TextMuted else IndigoGlow,
+                                    text = if (isSignedIn) "Live Cloud" else "Offline",
+                                    color = if (isSignedIn) IndigoGlow else TextMuted,
                                     fontSize = 10.sp,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                                 )
@@ -266,16 +269,47 @@ fun BookshelfScreen(
                         }
                     },
                     actions = {
-                        if (!isOfflineMode) {
-                            IconButton(onClick = onSyncWithRemote) {
-                                Icon(Icons.Default.Sync, contentDescription = "Sync Cloud", tint = IndigoAccent)
-                            }
+                        IconButton(onClick = onSyncWithRemote) {
+                            Icon(Icons.Default.Sync, contentDescription = "Sync Cloud", tint = IndigoAccent)
                         }
                         IconButton(onClick = {
                             val fileName = ZipExporter.exportToDownloads(context, allDetails)
                             Toast.makeText(context, "Exported: $fileName", Toast.LENGTH_LONG).show()
                         }) {
                             Icon(Icons.Default.Download, contentDescription = "Export ZIP", tint = EmeraldSync)
+                        }
+                        if (currentUser == null) {
+                            Button(
+                                onClick = onSignInWithGoogle,
+                                colors = ButtonDefaults.buttonColors(containerColor = IndigoAccent),
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Sign in with Google", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        } else {
+                            Surface(
+                                onClick = onSignOut,
+                                shape = RoundedCornerShape(20.dp),
+                                color = CosmicSlate,
+                                border = BorderStroke(1.dp, BorderSlate)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = currentUser.displayName ?: currentUser.email ?: "Account",
+                                        color = TextPrimary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Icon(Icons.Default.Logout, contentDescription = "Sign out", tint = RoseRuby, modifier = Modifier.size(13.dp))
+                                }
+                            }
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
@@ -297,7 +331,6 @@ fun BookshelfScreen(
                     .padding(innerPadding)
                     .background(SpaceBlack)
             ) {
-                // Search Bar
                 TextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
@@ -317,7 +350,6 @@ fun BookshelfScreen(
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 )
 
-                // Dynamic Category / Tag Chips
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -340,7 +372,6 @@ fun BookshelfScreen(
                     }
                 }
 
-                // Bookshelf Grid with authentic Book Size ratio cards
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
                     contentPadding = PaddingValues(16.dp),
@@ -360,7 +391,6 @@ fun BookshelfScreen(
         }
     }
 
-    // Create Notebook Dialog
     if (showCreateBookDialog) {
         var newTitle by remember { mutableStateOf("") }
         var newDesc by remember { mutableStateOf("") }
@@ -435,7 +465,6 @@ fun BookshelfScreen(
         )
     }
 
-    // Create Shelf Dialog
     if (showCreateShelfDialog) {
         var shelfTitle by remember { mutableStateOf("") }
         var shelfDesc by remember { mutableStateOf("") }

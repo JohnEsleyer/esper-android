@@ -133,7 +133,6 @@ interface EsperApiService {
 
 object RemoteClient {
     const val BASE_URL = "https://esper-api.johnesleyer.com/api/"
-    const val CLERK_JWKS_URL = "https://exciting-seasnail-5344.clerk.accounts.dev/.well-known/jwks.json"
 
     private var cachedService: EsperApiService? = null
 
@@ -144,7 +143,7 @@ object RemoteClient {
 
         val authInterceptor = Interceptor { chain ->
             val original = chain.request()
-            val token = prefs.getString("clerk_jwt_token", null)
+            val token = prefs.getString("firebase_jwt_token", null)
             val builder = original.newBuilder()
             if (!token.isNullOrBlank()) {
                 builder.header("Authorization", "Bearer $token")
