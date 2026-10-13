@@ -110,7 +110,51 @@ esper-android/app/build/outputs/apk/debug/app-debug.apk
 
 ## 5. Running the App via CLI
 
-### Option A: Using a Physical Android Device
+### Option A: Using the Automated Wireless Deploy Script (Recommended)
+
+The repository provides an interactive deployment script (`scripts/wireless-deploy.js`) that supports wireless pairing, device discovery via mDNS, automatic Gradle compilation, installing, and launching the app on your Android device over Wi-Fi (or USB). It works with `bun` or `node`.
+
+#### Requirements:
+- Either [Bun](https://bun.sh) (`bun`) or [Node.js](https://nodejs.org) (`node >= 18`) installed.
+- Android phone with **Developer Options** and **Wireless Debugging** (Android 11+) or **USB Debugging** enabled on the same Wi-Fi network.
+
+#### Usage:
+
+1. **Standard Run (Build + Connect/Pair + Install + Launch)**:
+   ```bash
+   # Using Bun script:
+   bun run deploy
+
+   # Or direct script execution:
+   bun run scripts/wireless-deploy.js
+   node scripts/wireless-deploy.js
+   ```
+
+2. **Skip Build (Fast Re-deploy of existing APK)**:
+   ```bash
+   # Using Bun script:
+   bun run install:device
+
+   # Or direct flags:
+   bun run scripts/wireless-deploy.js --skip-build
+   node scripts/wireless-deploy.js -s
+   ```
+
+3. **Force Re-pairing Step**:
+   ```bash
+   # Using Bun script:
+   bun run pair
+
+   # Or direct flags:
+   bun run scripts/wireless-deploy.js --pair
+   node scripts/wireless-deploy.js -p
+   ```
+
+The script will guide you step-by-step through pairing code entry (if not already paired), connect to the device, install `app-debug.apk`, and immediately start `MainActivity`.
+
+---
+
+### Option B: Using a Physical Android Device via Manual ADB (USB)
 
 1. Enable **Developer Options** and **USB Debugging** on your phone.
 2. Connect your phone via USB.
@@ -126,7 +170,7 @@ esper-android/app/build/outputs/apk/debug/app-debug.apk
 
 ---
 
-### Option B: Using a Headless / GUI Android Emulator via CLI
+### Option C: Using a Headless / GUI Android Emulator via CLI
 
 1. **Create an Android Virtual Device (AVD)**:
    ```bash

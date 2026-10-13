@@ -1,0 +1,11 @@
+{
+  "name": "esper-android",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "deploy": "bun scripts/wireless-deploy.js",
+    "install:device": "bun scripts/wireless-deploy.js --skip-build",
+    "pair": "bun scripts/wireless-deploy.js --pair --skip-build"
+  }
+}

@@ -1,9 +1,12 @@
 package com.esper.android.ui.workspace
 
 import android.annotation.SuppressLint
+import android.view.ViewGroup
 import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
@@ -17,12 +20,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.esper.android.data.model.CanvasEntity
 import com.esper.android.data.model.PageEntity
 import com.esper.android.data.model.QuestionEntity
+import com.esper.android.ui.lexical.ComposeLexicalEditor
 import com.esper.android.ui.theme.*
 
 class WorkspaceBridge(
@@ -34,6 +40,11 @@ class WorkspaceBridge(
 
     @JavascriptInterface
     fun onTimestampClicked(seconds: Int) = onTimestamp(seconds)
+}
+
+enum class EditorEngine {
+    LEXICAL_COMPOSE,
+    WEBVIEW
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,25 +59,27 @@ fun WorkspaceScreen(
     onSelectPage: (Int) -> Unit,
     onSaveNotes: (pageId: String, content: String) -> Unit
 ) {
-    var splitRatio by remember { mutableFloatStateOf(0.42f) }
+    val context = LocalContext.current
+    var splitRatio by remember { mutableFloatStateOf(0.40f) }
     var isChaptersSheetOpen by remember { mutableStateOf(false) }
     var isQuestionsSheetOpen by remember { mutableStateOf(false) }
     var isCommentsSheetOpen by remember { mutableStateOf(false) }
     var isSimMaximized by remember { mutableStateOf(false) }
+    var currentEngine by remember { mutableStateOf(EditorEngine.LEXICAL_COMPOSE) }
 
     val activePage = pages.getOrNull(activePageIndex)
-    val attachedCanvas = canvases.find { it.assignedPagesCsv.split(",").contains(activePage?.id) }
 
     var editorWebView by remember { mutableStateOf<WebView?>(null) }
     var simWebView by remember { mutableStateOf<WebView?>(null) }
 
+    // Synchronize notes to WebView if active
     LaunchedEffect(activePage?.id, activePage?.notes) {
         activePage?.let { page ->
             val escaped = page.notes
                 .replace("\\", "\\\\")
                 .replace("`", "\\`")
                 .replace("$", "\\$")
-            editorWebView?.evaluateJavascript("window.setMarkdown(`$escaped`);", null)
+            editorWebView?.evaluateJavascript("if (window.setMarkdown) { window.setMarkdown(`$escaped`); }", null)
         }
     }
 
@@ -97,6 +110,25 @@ fun WorkspaceScreen(
                     }
                 },
                 actions = {
+                    // Toggle between Jetpack Compose Lexical and WebView
+                    IconButton(onClick = {
+                        currentEngine = if (currentEngine == EditorEngine.LEXICAL_COMPOSE) {
+                            EditorEngine.WEBVIEW
+                        } else {
+                            EditorEngine.LEXICAL_COMPOSE
+                        }
+                        Toast.makeText(
+                            context,
+                            if (currentEngine == EditorEngine.LEXICAL_COMPOSE) "Mode: Jetpack Compose Lexical" else "Mode: Web Editor",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }) {
+                        Icon(
+                            if (currentEngine == EditorEngine.LEXICAL_COMPOSE) Icons.Default.DataObject else Icons.Default.Language,
+                            contentDescription = "Switch Engine",
+                            tint = if (currentEngine == EditorEngine.LEXICAL_COMPOSE) IndigoGlow else EmeraldSync
+                        )
+                    }
                     IconButton(onClick = { isQuestionsSheetOpen = true }) {
                         Icon(Icons.Default.HelpOutline, contentDescription = "Questions", tint = AmberGlow)
                     }
@@ -121,7 +153,7 @@ fun WorkspaceScreen(
             val density = LocalDensity.current
 
             Column(modifier = Modifier.fillMaxSize()) {
-                // Top Simulation Viewport
+                // Top Simulation Viewport (WebView Enabled with full permission & fallback)
                 val simHeight = if (isSimMaximized) totalHeight else totalHeight * splitRatio
                 Box(
                     modifier = Modifier
@@ -130,11 +162,23 @@ fun WorkspaceScreen(
                         .background(Color.Black)
                 ) {
                     AndroidView(
-                        factory = { context ->
-                            WebView(context).apply {
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                layoutParams = ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
                                 @SuppressLint("SetJavaScriptEnabled")
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    allowFileAccess = true
+                                    allowContentAccess = true
+                                    databaseEnabled = true
+                                    loadWithOverviewMode = true
+                                    useWideViewPort = true
+                                }
+                                webChromeClient = WebChromeClient()
                                 webViewClient = WebViewClient()
                                 loadUrl("file:///android_asset/workspace/sim_default.html")
                                 simWebView = this
@@ -144,7 +188,7 @@ fun WorkspaceScreen(
                     )
                 }
 
-                // Native Touch Splitter (60-120 FPS Pointer Drag)
+                // Native Touch Splitter Drag Handle
                 if (!isSimMaximized) {
                     Box(
                         modifier = Modifier
@@ -169,7 +213,7 @@ fun WorkspaceScreen(
                     }
                 }
 
-                // Bottom Lexical Notes Viewport
+                // Bottom Content Viewport (Toggle between Pure Lexical Compose and WebView)
                 if (!isSimMaximized) {
                     Box(
                         modifier = Modifier
@@ -177,35 +221,66 @@ fun WorkspaceScreen(
                             .weight(1f)
                             .background(SpaceBlack)
                     ) {
-                        AndroidView(
-                            factory = { context ->
-                                WebView(context).apply {
-                                    @SuppressLint("SetJavaScriptEnabled")
-                                    settings.javaScriptEnabled = true
-                                    settings.domStorageEnabled = true
-                                    addJavascriptInterface(
-                                        WorkspaceBridge(
-                                            onNotesChanged = { newText ->
-                                                activePage?.let { onSaveNotes(it.id, newText) }
-                                            },
-                                            onTimestamp = { /* Timestamp seeking handler */ }
-                                        ),
-                                        "EsperBridge"
-                                    )
-                                    webViewClient = object : WebViewClient() {
-                                        override fun onPageFinished(view: WebView?, url: String?) {
-                                            activePage?.let { page ->
-                                                val escaped = page.notes.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
-                                                evaluateJavascript("window.setMarkdown(`$escaped`);", null)
+                        if (currentEngine == EditorEngine.LEXICAL_COMPOSE) {
+                            // PURE JETPACK COMPOSE LEXICAL COMPONENT
+                            activePage?.let { page ->
+                                ComposeLexicalEditor(
+                                    initialMarkdown = page.notes,
+                                    onContentChanged = { updatedNotes ->
+                                        onSaveNotes(page.id, updatedNotes)
+                                    },
+                                    onTimestampClicked = { seconds ->
+                                        Toast.makeText(context, "Seeking simulation to ${seconds}s", Toast.LENGTH_SHORT).show()
+                                    }
+                                )
+                            }
+                        } else {
+                            // HYBRID WEBVIEW EDITOR
+                            AndroidView(
+                                factory = { ctx ->
+                                    WebView(ctx).apply {
+                                        layoutParams = ViewGroup.LayoutParams(
+                                            ViewGroup.LayoutParams.MATCH_PARENT,
+                                            ViewGroup.LayoutParams.MATCH_PARENT
+                                        )
+                                        @SuppressLint("SetJavaScriptEnabled")
+                                        settings.apply {
+                                            javaScriptEnabled = true
+                                            domStorageEnabled = true
+                                            allowFileAccess = true
+                                            allowContentAccess = true
+                                            databaseEnabled = true
+                                        }
+                                        webChromeClient = WebChromeClient()
+                                        addJavascriptInterface(
+                                            WorkspaceBridge(
+                                                onNotesChanged = { newText ->
+                                                    activePage?.let { onSaveNotes(it.id, newText) }
+                                                },
+                                                onTimestamp = { secs ->
+                                                    Toast.makeText(context, "Timestamp: ${secs}s", Toast.LENGTH_SHORT).show()
+                                                }
+                                            ),
+                                            "EsperBridge"
+                                        )
+                                        webViewClient = object : WebViewClient() {
+                                            override fun onPageFinished(view: WebView?, url: String?) {
+                                                activePage?.let { page ->
+                                                    val escaped = page.notes
+                                                        .replace("\\", "\\\\")
+                                                        .replace("`", "\\`")
+                                                        .replace("$", "\\$")
+                                                    evaluateJavascript("if (window.setMarkdown) { window.setMarkdown(`$escaped`); }", null)
+                                                }
                                             }
                                         }
+                                        loadUrl("file:///android_asset/workspace/editor.html")
+                                        editorWebView = this
                                     }
-                                    loadUrl("file:///android_asset/workspace/editor.html")
-                                    editorWebView = this
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     }
                 }
             }

@@ -2,39 +2,61 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <style>
+    * { box-sizing: border-box; }
     html, body {
       margin: 0; padding: 0; width: 100%; height: 100%;
-      background: #020617; overflow: hidden; font-family: sans-serif;
+      background: #020617; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    canvas { display: block; width: 100%; height: 100%; }
+    canvas { display: block; width: 100vw; height: 100vh; }
     .hud {
       position: fixed; top: 10px; left: 10px;
       color: #818cf8; font-size: 11px; font-family: monospace;
-      background: rgba(15, 23, 42, 0.75); padding: 4px 8px; border-radius: 6px;
-      border: 1px solid rgba(129, 140, 248, 0.25); backdrop-filter: blur(4px);
+      background: rgba(15, 23, 42, 0.85); padding: 5px 10px; border-radius: 8px;
+      border: 1px solid rgba(129, 140, 248, 0.35); backdrop-filter: blur(6px);
+      z-index: 10;
     }
   </style>
 </head>
 <body>
-  <div class="hud">keplerian-orbit &middot; running</div>
+  <div class="hud">&#x25C9; keplerian-orbit &middot; running</div>
   <canvas id="c"></canvas>
   <script>
-    const c = document.getElementById('c'), ctx = c.getContext('2d');
-    function resize() { c.width = window.innerWidth; c.height = window.innerHeight; }
+    const c = document.getElementById('c');
+    const ctx = c.getContext('2d');
+
+    function resize() {
+      const w = window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 360;
+      const h = window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 240;
+      if (c.width !== w || c.height !== h) {
+        c.width = w;
+        c.height = h;
+      }
+    }
+
     window.addEventListener('resize', resize);
-    resize();
+    window.addEventListener('DOMContentLoaded', resize);
+    window.addEventListener('load', resize);
+    setTimeout(resize, 150);
 
     let t = 0;
     function frame() {
+      if (c.width === 0 || c.height === 0) {
+        resize();
+      }
+
       ctx.fillStyle = '#020617';
       ctx.fillRect(0, 0, c.width, c.height);
-      const cx = c.width / 2, cy = c.height / 2;
-      const a = Math.min(cx, cy) * 0.75, b = a * 0.58;
-      const focusX = Math.sqrt(a * a - b * b);
+
+      const cx = c.width / 2;
+      const cy = c.height / 2;
+      const a = Math.max(25, Math.min(cx, cy) * 0.72);
+      const b = a * 0.58;
+      const focusX = Math.sqrt(Math.max(0, a * a - b * b));
 
       // Orbital ellipse
-      ctx.strokeStyle = 'rgba(129, 140, 248, 0.3)';
+      ctx.strokeStyle = 'rgba(129, 140, 248, 0.35)';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.ellipse(cx, cy, a, b, 0, 0, Math.PI * 2);
@@ -45,7 +67,7 @@
       ctx.shadowColor = '#fbbf24';
       ctx.shadowBlur = 14;
       ctx.beginPath();
-      ctx.arc(cx - focusX, cy, 10, 0, Math.PI * 2);
+      ctx.arc(cx - focusX, cy, 9, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
 
@@ -64,12 +86,12 @@
       // Planet sphere
       ctx.fillStyle = '#818cf8';
       ctx.beginPath();
-      ctx.arc(px, py, 6.5, 0, Math.PI * 2);
+      ctx.arc(px, py, 6, 0, Math.PI * 2);
       ctx.fill();
 
       requestAnimationFrame(frame);
     }
-    frame();
+    requestAnimationFrame(frame);
   </script>
 </body>
 </html>
