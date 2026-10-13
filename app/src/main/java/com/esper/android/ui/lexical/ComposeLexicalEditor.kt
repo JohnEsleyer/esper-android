@@ -4,7 +4,6 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -13,6 +12,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -85,9 +85,10 @@ fun ComposeLexicalEditor(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .imePadding()
             .background(SpaceBlack)
     ) {
-        // Native Lexical Formatting Palette
+        // Formatting Toolbar
         LexicalToolbar(
             isRawMode = isRawEditMode,
             onToggleMode = { isRawEditMode = !isRawEditMode },
@@ -105,11 +106,13 @@ fun ComposeLexicalEditor(
             label = "EditorEngineView"
         ) { isRaw ->
             if (isRaw) {
-                // Interactive Raw Markdown / Lexical Workspace
-                Box(
+                // Interactive Raw Markdown mode with generous fixed bottom padding for keyboard comfort
+                val scrollState = rememberScrollState()
+                Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(16.dp)
+                        .verticalScroll(scrollState)
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
                     BasicTextField(
                         value = rawText,
@@ -120,25 +123,25 @@ fun ComposeLexicalEditor(
                             fontFamily = FontFamily.Monospace
                         ),
                         cursorBrush = SolidColor(IndigoAccent),
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxWidth()
                     )
+                    // Ample fixed empty space below the editor so typing text is always visible above the keyboard
+                    Spacer(modifier = Modifier.height(340.dp))
                 }
             } else {
-                // Rich Native Lexical Component Viewport
+                // Native Lexical Component Viewport with fixed bottom padding
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 16.dp),
-                    contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp),
+                    contentPadding = PaddingValues(top = 16.dp, bottom = 340.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     itemsIndexed(blocks, key = { _, it -> it.key }) { _, block ->
                         LexicalBlockRenderer(
                             block = block,
                             onTimestampClicked = onTimestampClicked,
-                            onToggleTask = { checked ->
-                                // Optional interactive task toggle
-                            }
+                            onToggleTask = { _ -> }
                         )
                     }
                 }
@@ -153,8 +156,6 @@ fun LexicalBlockRenderer(
     onTimestampClicked: (Int) -> Unit,
     onToggleTask: (Boolean) -> Unit
 ) {
-    val context = LocalContext.current
-
     when (block) {
         is LexicalHeadingNode -> {
             val (size, weight, color) = when (block.level) {
@@ -323,7 +324,6 @@ fun LexicalBlockRenderer(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(8.dp)) {
-                    // Header row
                     Row(modifier = Modifier.fillMaxWidth().background(SurfaceSlate).padding(6.dp)) {
                         block.headers.forEach { h ->
                             Text(
@@ -335,7 +335,6 @@ fun LexicalBlockRenderer(
                             )
                         }
                     }
-                    // Data rows
                     block.rows.forEach { row ->
                         Row(modifier = Modifier.fillMaxWidth().padding(6.dp)) {
                             row.forEach { cell ->

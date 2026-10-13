@@ -51,6 +51,18 @@ interface EsperDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertQuestions(questions: List<QuestionEntity>)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertQuestion(question: QuestionEntity)
+
+    @Query("UPDATE questions SET title = :title WHERE id = :questionId")
+    suspend fun updateQuestionTitle(questionId: String, title: String)
+
+    @Query("UPDATE questions SET answer = :answer WHERE id = :questionId")
+    suspend fun updateQuestionAnswer(questionId: String, answer: String)
+
+    @Query("DELETE FROM questions WHERE id = :questionId")
+    suspend fun deleteQuestion(questionId: String)
+
     @Query("UPDATE pages SET notes = :notes WHERE id = :pageId")
     suspend fun updatePageNotes(pageId: String, notes: String)
 
