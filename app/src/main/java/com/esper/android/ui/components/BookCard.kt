@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -21,7 +22,8 @@ import com.esper.android.ui.theme.*
 @Composable
 fun BookCard(
     notebook: NotebookEntity,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onDelete: () -> Unit = {}
 ) {
     val gradient = when (notebook.coverPreset) {
         "quantum" -> listOf(Color(0xFF064E3B), Color(0xFF0F172A), Color(0xFF134E4A))
@@ -44,15 +46,32 @@ fun BookCard(
                     .background(Brush.linearGradient(gradient))
                     .padding(14.dp)
             ) {
-                if (notebook.isPinned) {
-                    Icon(
-                        Icons.Default.Star,
-                        contentDescription = "Pinned",
-                        tint = AmberGlow,
-                        modifier = Modifier
-                            .size(16.dp)
-                            .align(Alignment.TopEnd)
-                    )
+                Row(
+                    modifier = Modifier.fillMaxWidth().align(Alignment.TopEnd),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (notebook.isPinned) {
+                        Icon(
+                            Icons.Default.Star,
+                            contentDescription = "Pinned",
+                            tint = AmberGlow,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.size(16.dp))
+                    }
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            tint = Color.White.copy(alpha = 0.6f),
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
                 }
 
                 Text(

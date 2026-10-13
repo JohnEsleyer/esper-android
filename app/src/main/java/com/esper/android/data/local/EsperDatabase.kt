@@ -9,9 +9,10 @@ import com.esper.android.data.model.*
         NotebookEntity::class,
         PageEntity::class,
         CanvasEntity::class,
-        QuestionEntity::class
+        QuestionEntity::class,
+        ShelfEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class EsperDatabase : RoomDatabase() {

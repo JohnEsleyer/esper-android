@@ -2,7 +2,6 @@ package com.esper.android.ui.workspace
 
 import android.annotation.SuppressLint
 import android.view.ViewGroup
-import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -31,22 +30,6 @@ import com.esper.android.data.model.QuestionEntity
 import com.esper.android.ui.lexical.ComposeLexicalEditor
 import com.esper.android.ui.theme.*
 
-class WorkspaceBridge(
-    private val onNotesChanged: (String) -> Unit,
-    private val onTimestamp: (Int) -> Unit
-) {
-    @JavascriptInterface
-    fun onContentChanged(markdown: String) = onNotesChanged(markdown)
-
-    @JavascriptInterface
-    fun onTimestampClicked(seconds: Int) = onTimestamp(seconds)
-}
-
-enum class EditorEngine {
-    LEXICAL_COMPOSE,
-    WEBVIEW
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkspaceScreen(
@@ -57,31 +40,25 @@ fun WorkspaceScreen(
     activePageIndex: Int,
     onNavigateBack: () -> Unit,
     onSelectPage: (Int) -> Unit,
-    onSaveNotes: (pageId: String, content: String) -> Unit
+    onCreatePage: (title: String, parentId: String?) -> Unit,
+    onDeletePage: (pageId: String) -> Unit,
+    onSaveNotes: (pageId: String, content: String) -> Unit,
+    onAttachCanvas: (title: String, kind: String, payload: String) -> Unit,
+    onDeleteCanvas: (canvasId: String) -> Unit
 ) {
     val context = LocalContext.current
-    var splitRatio by remember { mutableFloatStateOf(0.40f) }
+    var splitRatio by remember { mutableFloatStateOf(0.42f) }
     var isChaptersSheetOpen by remember { mutableStateOf(false) }
     var isQuestionsSheetOpen by remember { mutableStateOf(false) }
     var isCommentsSheetOpen by remember { mutableStateOf(false) }
+    var isAttachmentsSheetOpen by remember { mutableStateOf(false) }
     var isSimMaximized by remember { mutableStateOf(false) }
-    var currentEngine by remember { mutableStateOf(EditorEngine.LEXICAL_COMPOSE) }
 
+    var selectedCanvasIndex by remember { mutableIntStateOf(0) }
     val activePage = pages.getOrNull(activePageIndex)
+    val activeCanvas = canvases.getOrNull(selectedCanvasIndex)
 
-    var editorWebView by remember { mutableStateOf<WebView?>(null) }
     var simWebView by remember { mutableStateOf<WebView?>(null) }
-
-    // Synchronize notes to WebView if active
-    LaunchedEffect(activePage?.id, activePage?.notes) {
-        activePage?.let { page ->
-            val escaped = page.notes
-                .replace("\\", "\\\\")
-                .replace("`", "\\`")
-                .replace("$", "\\$")
-            editorWebView?.evaluateJavascript("if (window.setMarkdown) { window.setMarkdown(`$escaped`); }", null)
-        }
-    }
 
     Scaffold(
         topBar = {
@@ -110,27 +87,11 @@ fun WorkspaceScreen(
                     }
                 },
                 actions = {
-                    // Toggle between Jetpack Compose Lexical and WebView
-                    IconButton(onClick = {
-                        currentEngine = if (currentEngine == EditorEngine.LEXICAL_COMPOSE) {
-                            EditorEngine.WEBVIEW
-                        } else {
-                            EditorEngine.LEXICAL_COMPOSE
-                        }
-                        Toast.makeText(
-                            context,
-                            if (currentEngine == EditorEngine.LEXICAL_COMPOSE) "Mode: Jetpack Compose Lexical" else "Mode: Web Editor",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }) {
-                        Icon(
-                            if (currentEngine == EditorEngine.LEXICAL_COMPOSE) Icons.Default.DataObject else Icons.Default.Language,
-                            contentDescription = "Switch Engine",
-                            tint = if (currentEngine == EditorEngine.LEXICAL_COMPOSE) IndigoGlow else EmeraldSync
-                        )
+                    IconButton(onClick = { isAttachmentsSheetOpen = true }) {
+                        Icon(Icons.Default.Attachment, contentDescription = "Attachments & Canvases", tint = EmeraldSync)
                     }
                     IconButton(onClick = { isQuestionsSheetOpen = true }) {
-                        Icon(Icons.Default.HelpOutline, contentDescription = "Questions", tint = AmberGlow)
+                        Icon(Icons.Default.HelpOutline, contentDescription = "Review Questions", tint = AmberGlow)
                     }
                     IconButton(onClick = { isCommentsSheetOpen = true }) {
                         Icon(Icons.Default.ChatBubbleOutline, contentDescription = "Discussion", tint = IndigoGlow)
@@ -153,7 +114,7 @@ fun WorkspaceScreen(
             val density = LocalDensity.current
 
             Column(modifier = Modifier.fillMaxSize()) {
-                // Top Simulation Viewport (WebView Enabled with full permission & fallback)
+                // Top Simulation Viewport
                 val simHeight = if (isSimMaximized) totalHeight else totalHeight * splitRatio
                 Box(
                     modifier = Modifier
@@ -180,8 +141,23 @@ fun WorkspaceScreen(
                                 }
                                 webChromeClient = WebChromeClient()
                                 webViewClient = WebViewClient()
-                                loadUrl("file:///android_asset/workspace/sim_default.html")
+
+                                if (activeCanvas != null && activeCanvas.kind == "youtube") {
+                                    val ytEmbed = "https://www.youtube.com/embed/${activeCanvas.payloadJson}?enablejsapi=1"
+                                    loadUrl(ytEmbed)
+                                } else if (activeCanvas != null && activeCanvas.payloadJson.isNotBlank()) {
+                                    loadDataWithBaseURL("https://localhost/", activeCanvas.payloadJson, "text/html", "UTF-8", null)
+                                } else {
+                                    loadUrl("file:///android_asset/workspace/sim_default.html")
+                                }
                                 simWebView = this
+                            }
+                        },
+                        update = { wv ->
+                            if (activeCanvas != null && activeCanvas.kind == "youtube") {
+                                wv.loadUrl("https://www.youtube.com/embed/${activeCanvas.payloadJson}?enablejsapi=1")
+                            } else if (activeCanvas != null && activeCanvas.payloadJson.isNotBlank()) {
+                                wv.loadDataWithBaseURL("https://localhost/", activeCanvas.payloadJson, "text/html", "UTF-8", null)
                             }
                         },
                         modifier = Modifier.fillMaxSize()
@@ -213,7 +189,7 @@ fun WorkspaceScreen(
                     }
                 }
 
-                // Bottom Content Viewport (Toggle between Pure Lexical Compose and WebView)
+                // Bottom Content Viewport (Native Compose Lexical Editor)
                 if (!isSimMaximized) {
                     Box(
                         modifier = Modifier
@@ -221,64 +197,19 @@ fun WorkspaceScreen(
                             .weight(1f)
                             .background(SpaceBlack)
                     ) {
-                        if (currentEngine == EditorEngine.LEXICAL_COMPOSE) {
-                            // PURE JETPACK COMPOSE LEXICAL COMPONENT
-                            activePage?.let { page ->
-                                ComposeLexicalEditor(
-                                    initialMarkdown = page.notes,
-                                    onContentChanged = { updatedNotes ->
-                                        onSaveNotes(page.id, updatedNotes)
-                                    },
-                                    onTimestampClicked = { seconds ->
-                                        Toast.makeText(context, "Seeking simulation to ${seconds}s", Toast.LENGTH_SHORT).show()
-                                    }
-                                )
-                            }
-                        } else {
-                            // HYBRID WEBVIEW EDITOR
-                            AndroidView(
-                                factory = { ctx ->
-                                    WebView(ctx).apply {
-                                        layoutParams = ViewGroup.LayoutParams(
-                                            ViewGroup.LayoutParams.MATCH_PARENT,
-                                            ViewGroup.LayoutParams.MATCH_PARENT
-                                        )
-                                        @SuppressLint("SetJavaScriptEnabled")
-                                        settings.apply {
-                                            javaScriptEnabled = true
-                                            domStorageEnabled = true
-                                            allowFileAccess = true
-                                            allowContentAccess = true
-                                            databaseEnabled = true
-                                        }
-                                        webChromeClient = WebChromeClient()
-                                        addJavascriptInterface(
-                                            WorkspaceBridge(
-                                                onNotesChanged = { newText ->
-                                                    activePage?.let { onSaveNotes(it.id, newText) }
-                                                },
-                                                onTimestamp = { secs ->
-                                                    Toast.makeText(context, "Timestamp: ${secs}s", Toast.LENGTH_SHORT).show()
-                                                }
-                                            ),
-                                            "EsperBridge"
-                                        )
-                                        webViewClient = object : WebViewClient() {
-                                            override fun onPageFinished(view: WebView?, url: String?) {
-                                                activePage?.let { page ->
-                                                    val escaped = page.notes
-                                                        .replace("\\", "\\\\")
-                                                        .replace("`", "\\`")
-                                                        .replace("$", "\\$")
-                                                    evaluateJavascript("if (window.setMarkdown) { window.setMarkdown(`$escaped`); }", null)
-                                                }
-                                            }
-                                        }
-                                        loadUrl("file:///android_asset/workspace/editor.html")
-                                        editorWebView = this
-                                    }
+                        activePage?.let { page ->
+                            ComposeLexicalEditor(
+                                initialMarkdown = page.notes,
+                                onContentChanged = { updatedNotes ->
+                                    onSaveNotes(page.id, updatedNotes)
                                 },
-                                modifier = Modifier.fillMaxSize()
+                                onTimestampClicked = { seconds ->
+                                    Toast.makeText(context, "Seeking visual companion to ${seconds}s", Toast.LENGTH_SHORT).show()
+                                    simWebView?.evaluateJavascript(
+                                        "if (window.seekTo) { window.seekTo($seconds); }",
+                                        null
+                                    )
+                                }
                             )
                         }
                     }
@@ -286,12 +217,35 @@ fun WorkspaceScreen(
             }
         }
 
+        // Chapters & Chapter CRUD Bottom Sheet
         if (isChaptersSheetOpen) {
             ChapterBottomSheet(
                 pages = pages,
                 activePageIndex = activePageIndex,
                 onDismiss = { isChaptersSheetOpen = false },
-                onSelectPage = onSelectPage
+                onSelectPage = onSelectPage,
+                onCreatePage = { title, parentId ->
+                    onCreatePage(title, parentId)
+                },
+                onDeletePage = { pageId ->
+                    onDeletePage(pageId)
+                }
+            )
+        }
+
+        // Attachment / Companion Visuals Sheet
+        if (isAttachmentsSheetOpen) {
+            AttachmentsBottomSheet(
+                canvases = canvases,
+                selectedIndex = selectedCanvasIndex,
+                onSelectCanvas = { idx -> selectedCanvasIndex = idx },
+                onAddAttachment = { title, kind, payload ->
+                    onAttachCanvas(title, kind, payload)
+                },
+                onDeleteAttachment = { canvasId ->
+                    onDeleteCanvas(canvasId)
+                },
+                onDismiss = { isAttachmentsSheetOpen = false }
             )
         }
 

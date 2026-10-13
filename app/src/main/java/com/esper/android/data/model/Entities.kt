@@ -8,13 +8,13 @@ data class NotebookEntity(
     val title: String,
     val description: String,
     val ownerSub: String,
-    val visibility: String,
-    val isEncrypted: Boolean,
-    val coverPreset: String,
-    val coverImage: String?,
-    val isPinned: Boolean,
-    val tagsCsv: String,
-    val updatedAt: Long
+    val visibility: String = "public", // "public", "protected", "restricted"
+    val isEncrypted: Boolean = false,
+    val coverPreset: String = "celestial",
+    val coverImage: String? = null,
+    val isPinned: Boolean = false,
+    val tagsCsv: String = "",
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(
@@ -32,10 +32,10 @@ data class NotebookEntity(
 data class PageEntity(
     @PrimaryKey val id: String,
     val notebookId: String,
-    val parentId: String?,
+    val parentId: String? = null,
     val title: String,
-    val notes: String,
-    val position: Int
+    val notes: String = "",
+    val position: Int = 0
 )
 
 @Entity(
@@ -56,7 +56,7 @@ data class CanvasEntity(
     val kind: String, // "html", "youtube", "excalidraw"
     val title: String,
     val payloadJson: String,
-    val assignedPagesCsv: String
+    val assignedPagesCsv: String = ""
 )
 
 @Entity(
@@ -76,5 +76,17 @@ data class QuestionEntity(
     val notebookId: String,
     val title: String,
     val answer: String,
-    val position: Int
+    val position: Int = 0
+)
+
+@Entity(tableName = "shelves")
+data class ShelfEntity(
+    @PrimaryKey val id: String,
+    val title: String,
+    val description: String = "",
+    val color: String = "#6366F1",
+    val coverPreset: String = "midnight",
+    val position: Int = 0,
+    val notebookIdsCsv: String = "",
+    val updatedAt: Long = System.currentTimeMillis()
 )
