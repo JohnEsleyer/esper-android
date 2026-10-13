@@ -137,6 +137,14 @@ fun AttachmentsBottomSheet(
                             onClick = { kind = "youtube" },
                             label = { Text("YouTube Video") }
                         )
+                        FilterChip(
+                            selected = kind == "draw",
+                            onClick = {
+                                kind = "draw"
+                                if (payload.isBlank()) payload = "{\"elements\":[]}"
+                            },
+                            label = { Text("Drawing") }
+                        )
                     }
 
                     if (kind != "youtube") {
@@ -151,7 +159,7 @@ fun AttachmentsBottomSheet(
                     OutlinedTextField(
                         value = payload,
                         onValueChange = { payload = it },
-                        label = { Text(if (kind == "youtube") "YouTube Video URL (paste URL)" else "HTML / JS Simulation Code") },
+                        label = { Text(if (kind == "youtube") "YouTube Video URL (paste URL)" else if (kind == "draw") "Drawing JSON (elements)" else "HTML / JS Simulation Code") },
                         placeholder = {
                             if (kind == "youtube") {
                                 Text("https://www.youtube.com/watch?v=...")
@@ -166,9 +174,14 @@ fun AttachmentsBottomSheet(
             confirmButton = {
                 Button(
                     onClick = {
-                        val finalTitle = if (kind == "youtube") "YouTube Video" else title.trim()
-                        if (payload.isNotBlank() && (kind == "youtube" || finalTitle.isNotBlank())) {
-                            onAddAttachment(finalTitle, kind, payload.trim())
+                        val finalTitle = when (kind) {
+                            "youtube" -> "YouTube Video"
+                            "draw" -> title.trim().ifBlank { "Drawing Canvas" }
+                            else -> title.trim()
+                        }
+                        val finalPayload = if (kind == "draw" && payload.isBlank()) "{\"elements\":[]}" else payload.trim()
+                        if (finalPayload.isNotBlank() && (kind == "youtube" || kind == "draw" || finalTitle.isNotBlank())) {
+                            onAddAttachment(finalTitle, kind, finalPayload)
                             title = ""
                             payload = ""
                             showDialog = false

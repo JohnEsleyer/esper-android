@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -37,6 +38,7 @@ import com.esper.android.data.local.NotebookWithDetails
 import com.esper.android.data.model.NotebookEntity
 import com.esper.android.data.model.ShelfEntity
 import com.esper.android.ui.components.BookCard
+import com.esper.android.ui.components.CustomBottomNavBar
 import com.esper.android.ui.components.PullToRefreshLayout
 import com.esper.android.ui.theme.*
 import com.google.firebase.auth.FirebaseUser
@@ -57,6 +59,7 @@ fun BookshelfScreen(
     onOpenNotebook: (String) -> Unit,
     onDeleteNotebook: (String) -> Unit,
     onOpenAllTagsScreen: () -> Unit,
+    onOpenTabsScreen: () -> Unit,
     onOpenSettingsScreen: () -> Unit,
     onOpenCreateNotebookScreen: () -> Unit,
     onDeleteShelf: (String) -> Unit,
@@ -71,8 +74,6 @@ fun BookshelfScreen(
 
     val pageSize = 6
     var currentPage by remember { mutableIntStateOf(1) }
-    var pageInputText by remember { mutableStateOf("1") }
-    var isEditingPageNum by remember { mutableStateOf(false) }
 
     // Books are strictly ordered latest to oldest
     val sortedNotebooks = remember(notebooks) {
@@ -93,14 +94,7 @@ fun BookshelfScreen(
     }
 
     LaunchedEffect(totalPages) {
-        if (currentPage > totalPages) {
-            currentPage = totalPages
-            pageInputText = totalPages.toString()
-        }
-    }
-
-    LaunchedEffect(currentPage) {
-        pageInputText = currentPage.toString()
+        if (currentPage > totalPages) currentPage = totalPages
     }
 
     val pagedBooks = remember(filtered, currentPage) {
@@ -119,8 +113,13 @@ fun BookshelfScreen(
         }
     }
 
+    BackHandler(enabled = drawerState.isOpen) {
+        coroutineScope.launch { drawerState.close() }
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
+        gesturesEnabled = true,
         drawerContent = {
             ModalDrawerSheet(
                 drawerContainerColor = CosmicSlate,
@@ -346,166 +345,17 @@ fun BookshelfScreen(
                 )
             },
             bottomBar = {
-                Surface(
-                    color = CosmicSlate,
-                    border = BorderStroke(1.dp, BorderSlate),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            FilledTonalIconButton(
-                                onClick = {
-                                    if (currentPage > 1) {
-                                        currentPage--
-                                    }
-                                },
-                                enabled = currentPage > 1,
-                                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                    containerColor = SurfaceSlate,
-                                    disabledContainerColor = CosmicSlate
-                                ),
-                                modifier = Modifier.size(34.dp)
-                            ) {
-                                Icon(Icons.Default.ChevronLeft, contentDescription = "Previous Page", tint = if (currentPage > 1) TextPrimary else TextMuted)
-                            }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                Text("Page", color = TextMuted, fontSize = 12.sp)
-                                Spacer(modifier = Modifier.width(6.dp))
-
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = SpaceBlack,
-                                    border = BorderStroke(1.dp, if (isEditingPageNum) IndigoAccent else BorderSlate),
-                                    modifier = Modifier.width(48.dp).height(30.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        BasicTextField(
-                                            value = pageInputText,
-                                            onValueChange = { input ->
-                                                val filteredInput = input.filter { it.isDigit() }.take(3)
-                                                pageInputText = filteredInput
-                                                isEditingPageNum = true
-                                            },
-                                            singleLine = true,
-                                            textStyle = TextStyle(
-                                                color = IndigoGlow,
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                textAlign = TextAlign.Center
-                                            ),
-                                            keyboardOptions = KeyboardOptions(
-                                                keyboardType = KeyboardType.Number,
-                                                imeAction = ImeAction.Done
-                                            ),
-                                            keyboardActions = KeyboardActions(
-                                                onDone = {
-                                                    val num = pageInputText.toIntOrNull() ?: 1
-                                                    currentPage = num.coerceIn(1, totalPages)
-                                                    pageInputText = currentPage.toString()
-                                                    isEditingPageNum = false
-                                                }
-                                            ),
-                                            cursorBrush = SolidColor(IndigoAccent),
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("of $totalPages (${filtered.size} books)", color = TextMuted, fontSize = 12.sp)
-                            }
-
-                            FilledTonalIconButton(
-                                onClick = {
-                                    if (currentPage < totalPages) {
-                                        currentPage++
-                                    }
-                                },
-                                enabled = currentPage < totalPages,
-                                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                    containerColor = SurfaceSlate,
-                                    disabledContainerColor = CosmicSlate
-                                ),
-                                modifier = Modifier.size(34.dp)
-                            ) {
-                                Icon(Icons.Default.ChevronRight, contentDescription = "Next Page", tint = if (currentPage < totalPages) TextPrimary else TextMuted)
-                            }
-                        }
-
-                        HorizontalDivider(color = BorderSlate.copy(alpha = 0.5f), thickness = 1.dp)
-
-                        NavigationBar(
-                            containerColor = CosmicSlate,
-                            modifier = Modifier.height(60.dp)
-                        ) {
-                            NavigationBarItem(
-                                selected = selectedTagFilter == "All",
-                                onClick = { onSelectTagFilter("All") },
-                                icon = { Icon(Icons.Default.Book, contentDescription = "Library", modifier = Modifier.size(20.dp)) },
-                                label = { Text("Library", fontSize = 10.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = TextPrimary,
-                                    indicatorColor = IndigoAccent,
-                                    unselectedIconColor = TextMuted,
-                                    unselectedTextColor = TextMuted
-                                )
-                            )
-
-                            NavigationBarItem(
-                                selected = false,
-                                onClick = onOpenAllTagsScreen,
-                                icon = { Icon(Icons.Default.Tag, contentDescription = "Tags", modifier = Modifier.size(20.dp)) },
-                                label = { Text("Tags", fontSize = 10.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    unselectedIconColor = TextMuted,
-                                    unselectedTextColor = TextMuted
-                                )
-                            )
-
-                            NavigationBarItem(
-                                selected = false,
-                                onClick = onOpenCreateNotebookScreen,
-                                icon = {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(28.dp)
-                                            .clip(CircleShape)
-                                            .background(IndigoAccent),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(Icons.Default.Add, contentDescription = "New Book", tint = Color.White, modifier = Modifier.size(18.dp))
-                                    }
-                                },
-                                label = { Text("New Book", fontSize = 10.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    unselectedIconColor = IndigoAccent,
-                                    unselectedTextColor = IndigoGlow
-                                )
-                            )
-
-                            NavigationBarItem(
-                                selected = false,
-                                onClick = onOpenSettingsScreen,
-                                icon = { Icon(Icons.Default.Settings, contentDescription = "Settings", modifier = Modifier.size(20.dp)) },
-                                label = { Text("Settings", fontSize = 10.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    unselectedIconColor = TextMuted,
-                                    unselectedTextColor = TextMuted
-                                )
-                            )
-                        }
-                    }
-                }
+                CustomBottomNavBar(
+                    currentPage = currentPage,
+                    totalPages = totalPages,
+                    totalBooksCount = filtered.size,
+                    onPageSelected = { currentPage = it },
+                    onOpenLibrary = { onSelectTagFilter("All") },
+                    onOpenTags = onOpenAllTagsScreen,
+                    onOpenTabs = onOpenTabsScreen,
+                    onOpenCreateBook = onOpenCreateNotebookScreen,
+                    onOpenSettings = onOpenSettingsScreen
+                )
             }
         ) { innerPadding ->
             PullToRefreshLayout(

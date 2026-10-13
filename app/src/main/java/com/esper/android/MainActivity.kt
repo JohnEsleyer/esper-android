@@ -5,12 +5,12 @@ import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
-import androidx.compose.ui.unit.dp
 import androidx.room.Room
 import com.esper.android.data.export.ZipExporter
 import com.esper.android.data.local.EsperDatabase
@@ -23,6 +23,7 @@ import com.esper.android.ui.bookshelf.CreateNotebookScreen
 import com.esper.android.ui.bookshelf.SettingsScreen
 import com.esper.android.ui.theme.EsperTheme
 import com.esper.android.ui.workspace.QuestionEditorScreen
+import com.esper.android.ui.workspace.TabsScreen
 import com.esper.android.ui.workspace.WorkspaceScreen
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
@@ -42,6 +43,7 @@ enum class ActiveScreen {
     ALL_TAGS,
     SETTINGS,
     CREATE_NOTEBOOK,
+    TABS,
     WORKSPACE
 }
 
@@ -65,6 +67,7 @@ class MainActivity : ComponentActivity() {
             EsperTheme {
                 val coroutineScope = rememberCoroutineScope()
                 var currentScreen by remember { mutableStateOf(ActiveScreen.BOOKSHELF) }
+                var previousScreen by remember { mutableStateOf(ActiveScreen.BOOKSHELF) }
                 var activeNotebookId by remember { mutableStateOf<String?>(null) }
                 var activePageIndex by remember { mutableIntStateOf(0) }
                 var activeEditingQuestion by remember { mutableStateOf<QuestionEntity?>(null) }
@@ -73,6 +76,21 @@ class MainActivity : ComponentActivity() {
                 var openTabIds by remember { mutableStateOf<List<String>>(listOf("kepler-001")) }
                 var currentUser by remember { mutableStateOf<FirebaseUser?>(auth.currentUser) }
                 var isOfflineMode by remember { mutableStateOf(false) }
+
+                fun navigateTo(screen: ActiveScreen) {
+                    previousScreen = currentScreen
+                    currentScreen = screen
+                }
+
+                fun popScreen() {
+                    currentScreen = previousScreen
+                }
+
+                if (currentScreen != ActiveScreen.BOOKSHELF && currentScreen != ActiveScreen.WORKSPACE) {
+                    BackHandler {
+                        popScreen()
+                    }
+                }
 
                 fun updateAuthToken(user: FirebaseUser?) {
                     val prefs = getSharedPreferences("esper_auth_prefs", Context.MODE_PRIVATE)
@@ -295,7 +313,33 @@ class MainActivity : ComponentActivity() {
                                 customTags = customTags.filter { it != tag }
                                 if (selectedTagFilter == tag) selectedTagFilter = "All"
                             },
-                            onNavigateBack = { currentScreen = ActiveScreen.BOOKSHELF }
+                            onNavigateBack = { popScreen() }
+                        )
+                    }
+
+                    currentScreen == ActiveScreen.TABS -> {
+                        TabsScreen(
+                            openNotebooks = openNotebooks,
+                            activeNotebookId = activeNotebookId ?: "",
+                            onSelectTab = { selectedId ->
+                                activeNotebookId = selectedId
+                                activePageIndex = 0
+                                navigateTo(ActiveScreen.WORKSPACE)
+                            },
+                            onCloseTab = { closedId ->
+                                val remaining = openTabIds - closedId
+                                openTabIds = remaining
+                                if (activeNotebookId == closedId) {
+                                    activeNotebookId = remaining.lastOrNull()
+                                    activePageIndex = 0
+                                }
+                            },
+                            onCloseAllTabs = {
+                                openTabIds = emptyList()
+                                activeNotebookId = null
+                                navigateTo(ActiveScreen.BOOKSHELF)
+                            },
+                            onNavigateBack = { popScreen() }
                         )
                     }
 
@@ -312,7 +356,7 @@ class MainActivity : ComponentActivity() {
                             },
                             onSyncNow = { syncWithCloud() },
                             onSignOut = { signOut() },
-                            onNavigateBack = { currentScreen = ActiveScreen.BOOKSHELF }
+                            onNavigateBack = { popScreen() }
                         )
                     }
 
@@ -344,7 +388,7 @@ class MainActivity : ComponentActivity() {
                                     openTabIds = openTabIds + newId
                                     activeNotebookId = newId
                                     activePageIndex = 0
-                                    currentScreen = ActiveScreen.WORKSPACE
+                                    navigateTo(ActiveScreen.WORKSPACE)
                                     launch(Dispatchers.IO) {
                                         try {
                                             api.createNote(mapOf("id" to newId, "title" to title, "description" to desc))
@@ -352,7 +396,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             },
-                            onNavigateBack = { currentScreen = ActiveScreen.BOOKSHELF }
+                            onNavigateBack = { popScreen() }
                         )
                     }
 
@@ -378,29 +422,10 @@ class MainActivity : ComponentActivity() {
                                 canvases = book.canvases,
                                 questions = book.questions,
                                 activePageIndex = activePageIndex,
-                                openNotebooks = openNotebooks,
-                                activeNotebookId = activeNotebookId!!,
-                                onSelectTab = { selectedId ->
-                                    activeNotebookId = selectedId
-                                    activePageIndex = 0
-                                },
-                                onCloseTab = { closedId ->
-                                    val remaining = openTabIds - closedId
-                                    openTabIds = remaining
-                                    if (activeNotebookId == closedId) {
-                                        activeNotebookId = remaining.lastOrNull()
-                                        activePageIndex = 0
-                                        if (activeNotebookId == null) currentScreen = ActiveScreen.BOOKSHELF
-                                    }
-                                },
-                                onCloseAllTabs = {
-                                    openTabIds = emptyList()
-                                    activeNotebookId = null
-                                    currentScreen = ActiveScreen.BOOKSHELF
-                                },
+                                onOpenTabsScreen = { navigateTo(ActiveScreen.TABS) },
                                 onNavigateBack = {
                                     activeNotebookId = null
-                                    currentScreen = ActiveScreen.BOOKSHELF
+                                    navigateTo(ActiveScreen.BOOKSHELF)
                                 },
                                 onSelectPage = { idx -> activePageIndex = idx },
                                 onCreatePage = { title, parentId ->
@@ -516,7 +541,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 activeNotebookId = id
                                 activePageIndex = 0
-                                currentScreen = ActiveScreen.WORKSPACE
+                                navigateTo(ActiveScreen.WORKSPACE)
                             },
                             onDeleteNotebook = { id ->
                                 coroutineScope.launch {
@@ -527,9 +552,10 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             },
-                            onOpenAllTagsScreen = { currentScreen = ActiveScreen.ALL_TAGS },
-                            onOpenSettingsScreen = { currentScreen = ActiveScreen.SETTINGS },
-                            onOpenCreateNotebookScreen = { currentScreen = ActiveScreen.CREATE_NOTEBOOK },
+                            onOpenAllTagsScreen = { navigateTo(ActiveScreen.ALL_TAGS) },
+                            onOpenTabsScreen = { navigateTo(ActiveScreen.TABS) },
+                            onOpenSettingsScreen = { navigateTo(ActiveScreen.SETTINGS) },
+                            onOpenCreateNotebookScreen = { navigateTo(ActiveScreen.CREATE_NOTEBOOK) },
                             onDeleteShelf = { id ->
                                 coroutineScope.launch {
                                     db.dao().deleteShelf(id)
