@@ -3,6 +3,7 @@ package com.esper.android
 import android.app.Activity
 import android.content.Context
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -20,6 +21,7 @@ import androidx.room.Room
 import com.esper.android.data.local.EsperDatabase
 import com.esper.android.data.model.*
 import com.esper.android.data.remote.RemoteClient
+import com.esper.android.ui.auth.LoginScreen
 import com.esper.android.ui.bookshelf.BookshelfScreen
 import com.esper.android.ui.theme.CosmicSlate
 import com.esper.android.ui.theme.EsperTheme
@@ -61,18 +63,15 @@ class MainActivity : ComponentActivity() {
                 var activePageIndex by remember { mutableIntStateOf(0) }
                 var activeEditingQuestion by remember { mutableStateOf<QuestionEntity?>(null) }
                 var showSettingsDialog by remember { mutableStateOf(false) }
-                var currentUser by remember { mutableStateOf<FirebaseUser?>(auth.currentUser) }
 
-                val notebooks by db.dao().observeAllNotebooks().collectAsState(initial = emptyList())
-                val shelves by db.dao().observeAllShelves().collectAsState(initial = emptyList())
-                val allDetails by db.dao().observeAllNotebooksWithDetails().collectAsState(initial = emptyList())
+                var currentUser by remember { mutableStateOf<FirebaseUser?>(auth.currentUser) }
+                var isOfflineMode by remember { mutableStateOf(false) }
 
                 fun updateAuthToken(user: FirebaseUser?) {
                     val prefs = getSharedPreferences("esper_auth_prefs", Context.MODE_PRIVATE)
                     if (user != null) {
                         user.getIdToken(false).addOnSuccessListener { result ->
-                            val token = result.token
-                            prefs.edit().putString("firebase_jwt_token", token).apply()
+                            prefs.edit().putString("firebase_jwt_token", result.token).apply()
                         }
                     } else {
                         prefs.edit().remove("firebase_jwt_token").apply()
@@ -82,24 +81,47 @@ class MainActivity : ComponentActivity() {
                 val googleSignInLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.StartActivityForResult()
                 ) { result ->
-                    if (result.resultCode == Activity.RESULT_OK) {
-                        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
-                        try {
-                            val account = task.getResult(ApiException::class.java)
-                            val credential = GoogleAuthProvider.getCredential(account.idToken, null)
-                            auth.signInWithCredential(credential).addOnCompleteListener { authTask ->
-                                if (authTask.isSuccessful) {
-                                    val user = auth.currentUser
-                                    currentUser = user
-                                    updateAuthToken(user)
-                                    Toast.makeText(applicationContext, "Signed in as ${user?.displayName}", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(applicationContext, "Auth failed: ${authTask.exception?.message}", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Toast.makeText(applicationContext, "Google Sign-In failed: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                    val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+                    try {
+                        val account = task.getResult(ApiException::class.java)
+                        val idToken = account.idToken
+                        if (idToken.isNullOrBlank()) {
+                            Toast.makeText(
+                                applicationContext,
+                                "Google Sign-In failed: No ID Token. Verify SHA-1 in Firebase Console.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            return@rememberLauncherForActivityResult
                         }
+
+                        val credential = GoogleAuthProvider.getCredential(idToken, null)
+                        auth.signInWithCredential(credential).addOnCompleteListener { authTask ->
+                            if (authTask.isSuccessful) {
+                                val user = auth.currentUser
+                                currentUser = user
+                                isOfflineMode = false
+                                updateAuthToken(user)
+                                Toast.makeText(applicationContext, "Signed in as ${user?.displayName}", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(
+                                    applicationContext,
+                                    "Firebase auth failed: ${authTask.exception?.localizedMessage}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    } catch (e: ApiException) {
+                        Log.e("EsperAuth", "Google Sign-In ApiException code: ${e.statusCode}", e)
+                        val message = when (e.statusCode) {
+                            10 -> "Developer Error (10): Missing debug SHA-1 fingerprint in Firebase Console."
+                            7 -> "Network error (7): Please check your internet connection."
+                            12500 -> "Sign-in failed (12500): Check Play Services config."
+                            else -> "Google Sign-In failed (${e.statusCode}): ${e.localizedMessage ?: "Canceled"}"
+                        }
+                        Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
+                    } catch (e: Exception) {
+                        Log.e("EsperAuth", "Unexpected auth error", e)
+                        Toast.makeText(applicationContext, "Authentication failed: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
                     }
                 }
 
@@ -109,7 +131,6 @@ class MainActivity : ComponentActivity() {
                         .requestEmail()
                         .build()
                     val client = GoogleSignIn.getClient(this@MainActivity, gso)
-                    // Ensure a fresh account picker each time
                     client.signOut().addOnCompleteListener {
                         googleSignInLauncher.launch(client.signInIntent)
                     }
@@ -118,6 +139,7 @@ class MainActivity : ComponentActivity() {
                 fun signOut() {
                     auth.signOut()
                     currentUser = null
+                    isOfflineMode = false
                     updateAuthToken(null)
                     Toast.makeText(applicationContext, "Signed out", Toast.LENGTH_SHORT).show()
                 }
@@ -129,6 +151,10 @@ class MainActivity : ComponentActivity() {
                     }
                     updateAuthToken(auth.currentUser)
                 }
+
+                val notebooks by db.dao().observeAllNotebooks().collectAsState(initial = emptyList())
+                val shelves by db.dao().observeAllShelves().collectAsState(initial = emptyList())
+                val allDetails by db.dao().observeAllNotebooksWithDetails().collectAsState(initial = emptyList())
 
                 // Seed demo notebook on first run
                 LaunchedEffect(Unit) {
@@ -210,7 +236,17 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // SCREEN NAVIGATION TREE
                 when {
+                    // 1. Not signed in and offline mode not active -> show Login Screen
+                    currentUser == null && !isOfflineMode -> {
+                        LoginScreen(
+                            onSignInWithGoogle = { launchGoogleSignIn() },
+                            onContinueOffline = { isOfflineMode = true }
+                        )
+                    }
+
+                    // 2. Question Editor View
                     activeEditingQuestion != null -> {
                         QuestionEditorScreen(
                             question = activeEditingQuestion!!,
@@ -227,13 +263,14 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
+
+                    // 3. Bookshelf View
                     activeNotebookId == null -> {
                         BookshelfScreen(
                             notebooks = notebooks,
                             shelves = shelves,
                             allDetails = allDetails,
                             currentUser = currentUser,
-                            onSignInWithGoogle = { launchGoogleSignIn() },
                             onSignOut = { signOut() },
                             onOpenNotebook = { id ->
                                 activeNotebookId = id
@@ -299,6 +336,8 @@ class MainActivity : ComponentActivity() {
                             onSyncWithRemote = { syncWithCloud() }
                         )
                     }
+
+                    // 4. Workspace View
                     else -> {
                         val details by db.dao().observeNotebookDetails(activeNotebookId!!).collectAsState(initial = null)
                         details?.let { book ->
@@ -412,7 +451,7 @@ class MainActivity : ComponentActivity() {
                         text = {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(
-                                    text = "User: ${currentUser?.displayName ?: currentUser?.email ?: "Guest (offline cache)"}",
+                                    text = "User: ${currentUser?.displayName ?: currentUser?.email ?: "Offline mode"}",
                                     color = TextPrimary
                                 )
                                 Text(

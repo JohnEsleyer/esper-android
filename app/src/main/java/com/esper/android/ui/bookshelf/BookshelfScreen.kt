@@ -1,7 +1,6 @@
 package com.esper.android.ui.bookshelf
 
 import android.widget.Toast
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -42,7 +41,6 @@ fun BookshelfScreen(
     shelves: List<ShelfEntity>,
     allDetails: List<NotebookWithDetails>,
     currentUser: FirebaseUser?,
-    onSignInWithGoogle: () -> Unit,
     onSignOut: () -> Unit,
     onOpenNotebook: (String) -> Unit,
     onCreateNotebook: (title: String, description: String, tags: String, preset: String, coverImage: String?) -> Unit,
@@ -118,7 +116,7 @@ fun BookshelfScreen(
                                 fontSize = 14.sp
                             )
                             Text(
-                                text = if (isSignedIn) "Live Cloud Sync Active" else "Local-only storage — sign in to sync",
+                                text = if (isSignedIn) "Live Cloud Sync Active" else "Local-only storage",
                                 color = if (isSignedIn) EmeraldSync else TextMuted,
                                 fontSize = 11.sp
                             )
@@ -222,23 +220,13 @@ fun BookshelfScreen(
                     HorizontalDivider(color = BorderSlate, thickness = 1.dp)
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    if (isSignedIn) {
-                        NavigationDrawerItem(
-                            icon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, tint = RoseRuby) },
-                            label = { Text("Sign out", color = RoseRuby) },
-                            selected = false,
-                            onClick = onSignOut,
-                            colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
-                        )
-                    } else {
-                        NavigationDrawerItem(
-                            icon = { Icon(Icons.Default.Login, contentDescription = null, tint = EmeraldSync) },
-                            label = { Text("Sign in with Google", color = TextPrimary) },
-                            selected = false,
-                            onClick = onSignInWithGoogle,
-                            colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
-                        )
-                    }
+                    NavigationDrawerItem(
+                        icon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, tint = RoseRuby) },
+                        label = { Text(if (isSignedIn) "Sign out" else "Exit Offline Mode", color = RoseRuby) },
+                        selected = false,
+                        onClick = onSignOut,
+                        colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
+                    )
                 }
             }
         }
@@ -269,47 +257,16 @@ fun BookshelfScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = onSyncWithRemote) {
-                            Icon(Icons.Default.Sync, contentDescription = "Sync Cloud", tint = IndigoAccent)
+                        if (isSignedIn) {
+                            IconButton(onClick = onSyncWithRemote) {
+                                Icon(Icons.Default.Sync, contentDescription = "Sync Cloud", tint = IndigoAccent)
+                            }
                         }
                         IconButton(onClick = {
                             val fileName = ZipExporter.exportToDownloads(context, allDetails)
                             Toast.makeText(context, "Exported: $fileName", Toast.LENGTH_LONG).show()
                         }) {
                             Icon(Icons.Default.Download, contentDescription = "Export ZIP", tint = EmeraldSync)
-                        }
-                        if (currentUser == null) {
-                            Button(
-                                onClick = onSignInWithGoogle,
-                                colors = ButtonDefaults.buttonColors(containerColor = IndigoAccent),
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                            ) {
-                                Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Sign in with Google", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                        } else {
-                            Surface(
-                                onClick = onSignOut,
-                                shape = RoundedCornerShape(20.dp),
-                                color = CosmicSlate,
-                                border = BorderStroke(1.dp, BorderSlate)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Text(
-                                        text = currentUser.displayName ?: currentUser.email ?: "Account",
-                                        color = TextPrimary,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Icon(Icons.Default.Logout, contentDescription = "Sign out", tint = RoseRuby, modifier = Modifier.size(13.dp))
-                                }
-                            }
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
