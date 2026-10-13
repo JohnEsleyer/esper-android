@@ -165,7 +165,7 @@ The script will guide you step-by-step through pairing code entry (if not alread
 4. Install and start the application:
    ```bash
    adb install -r app/build/outputs/apk/debug/app-debug.apk
-   adb shell am start -n com.esper.android/.MainActivity
+   adb shell am start -n com.johnesleyer.esper/com.esper.android.MainActivity
    ```
 
 ---
@@ -198,7 +198,7 @@ The script will guide you step-by-step through pairing code entry (if not alread
 4. **Install & Launch Esper**:
    ```bash
    ./gradlew installDebug
-   adb shell am start -n com.esper.android/.MainActivity
+   adb shell am start -n com.johnesleyer.esper/com.esper.android.MainActivity
    ```
 
 ---
@@ -207,10 +207,10 @@ The script will guide you step-by-step through pairing code entry (if not alread
 
 Stream real-time logcat output filtered by the application:
 ```bash
-adb logcat -v time | grep -E "com.esper.android|EsperBridge"
+adb logcat -v time | grep -E "com.johnesleyer.esper|com.esper.android|EsperBridge"
 ```
 
 To stop the app:
 ```bash
-adb shell am force-stop com.esper.android
+adb shell am force-stop com.johnesleyer.esper
 ```

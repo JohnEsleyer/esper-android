@@ -1,22 +1,27 @@
-# Errors & Resolution Log
+# Esper Android — Error Log
 
-### Error 1: Kotlin String Template Interpolation Error in MainActivity.kt
-- **Status:** [SOLVED]
-- **File:** `app/src/main/java/com/esper/android/MainActivity.kt:108`
-- **Error:** `Unresolved reference 'r'`
-- **Cause:** In the default seed page notes string literal, `$r(\theta)...$` was evaluated as a Kotlin string template variable `$r` rather than a raw character `$`.
-- **Resolution:** Escaped `$r` as `\$r` (and closing `$` as `\$`). Verified with `./gradlew assembleDebug` (build successful).
+Known problems encountered during builds/deploys, with fixes. Newest first.
 
-### Error 2: Missing FontWeight Import in WorkspaceScreen.kt
-- **Status:** [SOLVED]
-- **File:** `app/src/main/java/com/esper/android/ui/workspace/WorkspaceScreen.kt:162`
-- **Error:** `Unresolved reference 'FontWeight'`
-- **Cause:** `FontWeight` was referenced in the floating HTML button label without importing `androidx.compose.ui.text.font.FontWeight`.
-- **Resolution:** Added `import androidx.compose.ui.text.font.FontWeight`.
+---
 
-### Error 3: ExperimentalMaterial3Api Warning in LoginScreen.kt
-- **Status:** [SOLVED]
-- **File:** `app/src/main/java/com/esper/android/ui/auth/LoginScreen.kt:204`
-- **Error:** `This material API is experimental and is likely to change or to be removed in the future.`
-- **Cause:** Using `AlertDialog` with custom content overload requires `@OptIn(ExperimentalMaterial3Api::class)`.
-- **Resolution:** Added `@OptIn(ExperimentalMaterial3Api::class)` above `LoginScreen`.
+## 2026-10-13 — `Duplicate resources` for `default_web_client_id`
+
+**Status:** RESOLVED (proactively removed manual entry)
+
+**Cause:** The Google Services Gradle plugin auto-generates `default_web_client_id`
+from `app/google-services.json` (from the `oauth_client` entry with `client_type: 3`).
+Having a duplicate manual string in `strings.xml` causes a resource merge collision.
+
+**Fix:** Removed `default_web_client_id` from `app/src/main/res/values/strings.xml`,
+leaving only `app_name`. `MainActivity.kt` resolves the plugin-generated ID seamlessly.
+
+---
+
+## 2026-10-13 — `Unresolved reference 'dp'` in `MainActivity.kt:412`
+
+**Status:** FIXED
+
+**Cause:** The Firebase rewrite of `MainActivity.kt` used `8.dp` in the
+settings dialog but dropped `import androidx.compose.ui.unit.dp`.
+
+**Fix:** Re-added the import. Re-ran `bun run deploy`.

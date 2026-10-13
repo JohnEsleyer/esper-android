@@ -14,8 +14,8 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 const APK_PATH = path.join(ROOT_DIR, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
 const CONFIG_FILE = path.join(ROOT_DIR, '.wireless-device.json');
-const PACKAGE_NAME = 'com.esper.android';
-const ACTIVITY_NAME = '.MainActivity';
+const PACKAGE_NAME = 'com.johnesleyer.esper';
+const ACTIVITY_NAME = 'com.esper.android.MainActivity';
 
 // Color formatting
 const c = {

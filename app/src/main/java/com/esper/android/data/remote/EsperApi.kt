@@ -2,6 +2,8 @@ package com.esper.android.data.remote
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.google.android.gms.tasks.Tasks
+import com.google.firebase.auth.FirebaseAuth
 import com.google.gson.annotations.SerializedName
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -143,7 +145,22 @@ object RemoteClient {
 
         val authInterceptor = Interceptor { chain ->
             val original = chain.request()
-            val token = prefs.getString("firebase_jwt_token", null)
+
+            // Firebase ID tokens expire after 1 hour: fetch a live/refreshed
+            // token directly from Firebase on this background worker thread,
+            // falling back to the cached token.
+            val user = FirebaseAuth.getInstance().currentUser
+            val token = if (user != null) {
+                try {
+                    Tasks.await(user.getIdToken(false), 5, TimeUnit.SECONDS)?.token
+                        ?: prefs.getString("firebase_jwt_token", null)
+                } catch (_: Exception) {
+                    prefs.getString("firebase_jwt_token", null)
+                }
+            } else {
+                prefs.getString("firebase_jwt_token", null)
+            }
+
             val builder = original.newBuilder()
             if (!token.isNullOrBlank()) {
                 builder.header("Authorization", "Bearer $token")
