@@ -60,3 +60,6 @@ Thumbs.db
 
 # Wireless deployment state
 .wireless-device.json
+
+# Textify output
+codebase.txt
