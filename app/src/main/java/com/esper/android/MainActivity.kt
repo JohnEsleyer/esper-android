@@ -423,7 +423,7 @@ class MainActivity : ComponentActivity() {
                                     fontSize = 11.sp
                                 )
                                 Text(
-                                    text = "Clerk JWKS: ${RemoteClient.CLERK_JWKS_URL}",
+                                    text = "Authentication: Connected",
                                     color = TextMuted,
                                     fontSize = 11.sp
                                 )

@@ -106,15 +106,15 @@ fun LoginScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "Sign In with Clerk",
+                        text = "Sign In with Google",
                         color = TextPrimary,
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Connected to exciting-seasnail-5344.clerk.accounts.dev",
-                        color = IndigoGlow,
-                        fontSize = 11.sp,
+                        text = "Sync your notes, companion visuals, and flashcards",
+                        color = TextMuted,
+                        fontSize = 12.sp,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(top = 4.dp, bottom = 22.dp)
                     )
