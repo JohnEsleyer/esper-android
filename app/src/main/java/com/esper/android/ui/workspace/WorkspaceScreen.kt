@@ -6,13 +6,16 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,13 +25,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.esper.android.data.model.CanvasEntity
+import com.esper.android.data.model.NotebookEntity
 import com.esper.android.data.model.PageEntity
 import com.esper.android.data.model.QuestionEntity
 import com.esper.android.ui.components.EditorSkeleton
@@ -52,6 +54,11 @@ fun WorkspaceScreen(
     canvases: List<CanvasEntity>,
     questions: List<QuestionEntity>,
     activePageIndex: Int,
+    openNotebooks: List<NotebookEntity> = emptyList(),
+    activeNotebookId: String = "",
+    onSelectTab: (String) -> Unit = {},
+    onCloseTab: (String) -> Unit = {},
+    onCloseAllTabs: () -> Unit = {},
     onNavigateBack: () -> Unit,
     onSelectPage: (Int) -> Unit,
     onCreatePage: (title: String, parentId: String?) -> Unit,
@@ -60,6 +67,7 @@ fun WorkspaceScreen(
     onAttachCanvas: (title: String, kind: String, payload: String) -> Unit,
     onDeleteCanvas: (canvasId: String) -> Unit,
     onUpdateCanvasPayload: (canvasId: String, payload: String) -> Unit,
+    onAssignCanvasToPage: (canvasId: String) -> Unit = {},
     onCreateQuestion: (title: String) -> Unit,
     onDeleteQuestion: (questionId: String) -> Unit,
     onOpenQuestionEditor: (QuestionEntity) -> Unit
@@ -70,90 +78,118 @@ fun WorkspaceScreen(
     var viewportMode by remember { mutableStateOf(ViewportMode.SPLIT) }
     var isDraggingSplitter by remember { mutableStateOf(false) }
 
-    // Staged loading states
+    val leftChaptersDrawerState = rememberDrawerState(DrawerValue.Closed)
+    val rightTabsDrawerState = rememberDrawerState(DrawerValue.Closed)
+
+    var isCommentsSheetOpen by remember { mutableStateOf(false) }
+    var isQuestionsSheetOpen by remember { mutableStateOf(false) }
+    var isAttachmentsSheetOpen by remember { mutableStateOf(false) }
+    var showHtmlCodeEditor by remember { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var showEditYouTubeDialog by remember { mutableStateOf(false) }
+    var editYouTubeUrlBuffer by remember { mutableStateOf("") }
+
+    val activePage = pages.getOrNull(activePageIndex)
+
+    // A canvas is attached only if its assignedPagesCsv contains activePage.id.
+    // Pages without an attachment render the editor at full height (no split).
+    val attachedCanvas = remember(canvases, activePage?.id) {
+        activePage?.let { page ->
+            canvases.firstOrNull { c ->
+                c.assignedPagesCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.contains(page.id)
+            }
+        }
+    }
+
+    val hasAttachment = attachedCanvas != null
+
     var isEditorReady by remember { mutableStateOf(false) }
     var isAttachmentReady by remember { mutableStateOf(false) }
 
-    // Staged render timers: Bottom editor ready after 1.0s, Top simulation after 1.8s
-    LaunchedEffect(activePageIndex) {
+    LaunchedEffect(activePageIndex, hasAttachment) {
         isEditorReady = false
         isAttachmentReady = false
-        delay(1000)
+        delay(400)
         isEditorReady = true
-        delay(800)
-        isAttachmentReady = true
+        if (hasAttachment) {
+            delay(400)
+            isAttachmentReady = true
+        }
     }
-
-    var isChaptersSheetOpen by remember { mutableStateOf(false) }
-    var isCommentsSheetOpen by remember { mutableStateOf(false) }
-    var isAttachmentsSheetOpen by remember { mutableStateOf(false) }
-    var showHtmlCodeEditor by remember { mutableStateOf(false) }
-
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-
-    var selectedCanvasIndex by remember { mutableIntStateOf(0) }
-    val activePage = pages.getOrNull(activePageIndex)
-    val activeCanvas = canvases.getOrNull(selectedCanvasIndex)
 
     var simWebView by remember { mutableStateOf<WebView?>(null) }
 
-    // Right-side drawer for Questions
-    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+    ModalNavigationDrawer(
+        drawerState = leftChaptersDrawerState,
+        drawerContent = {
+            ChapterDrawerContent(
+                pages = pages,
+                canvases = canvases,
+                activePageIndex = activePageIndex,
+                onSelectPage = { idx ->
+                    coroutineScope.launch { leftChaptersDrawerState.close() }
+                    onSelectPage(idx)
+                },
+                onCreatePage = onCreatePage,
+                onDeletePage = onDeletePage
+            )
+        }
+    ) {
         ModalNavigationDrawer(
-            drawerState = drawerState,
+            drawerState = rightTabsDrawerState,
             drawerContent = {
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                    QuestionsDrawerContent(
-                        questions = questions,
-                        onSelectQuestion = { q ->
-                            coroutineScope.launch { drawerState.close() }
-                            onOpenQuestionEditor(q)
-                        },
-                        onCreateQuestion = { title -> onCreateQuestion(title) },
-                        onDeleteQuestion = { id -> onDeleteQuestion(id) }
-                    )
-                }
+                TabsDrawerContent(
+                    openNotebooks = openNotebooks,
+                    activeNotebookId = activeNotebookId,
+                    onSelectTab = { id ->
+                        coroutineScope.launch { rightTabsDrawerState.close() }
+                        onSelectTab(id)
+                    },
+                    onCloseTab = onCloseTab,
+                    onCloseAllTabs = onCloseAllTabs
+                )
             }
         ) {
-            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                Scaffold(
-                    topBar = {
-                        TopAppBar(
-                            title = {
-                                Column {
-                                    Text(notebookTitle, style = MaterialTheme.typography.titleSmall, maxLines = 1, color = TextPrimary)
-                                    activePage?.let { page ->
-                                        TextButton(
-                                            onClick = { isChaptersSheetOpen = true },
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Text(
-                                                text = "${activePageIndex + 1}. ${page.title}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = IndigoGlow
-                                            )
-                                            Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = IndigoGlow, modifier = Modifier.size(16.dp))
-                                        }
-                                    }
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = {
+                            Column {
+                                Text(notebookTitle, style = MaterialTheme.typography.titleSmall, maxLines = 1, color = TextPrimary)
+                                activePage?.let { page ->
+                                    Text(
+                                        text = "${activePageIndex + 1}. ${page.title}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = IndigoGlow,
+                                        maxLines = 1
+                                    )
                                 }
-                            },
-                            navigationIcon = {
+                            }
+                        },
+                        navigationIcon = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(onClick = onNavigateBack) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                                 }
-                            },
-                            actions = {
-                                IconButton(onClick = { isAttachmentsSheetOpen = true }) {
-                                    Icon(Icons.Default.Attachment, contentDescription = "Attachments", tint = EmeraldSync)
+                                IconButton(onClick = { coroutineScope.launch { leftChaptersDrawerState.open() } }) {
+                                    Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = "Chapters Menu", tint = IndigoGlow)
                                 }
-                                IconButton(onClick = { isCommentsSheetOpen = true }) {
-                                    Icon(Icons.Default.ChatBubbleOutline, contentDescription = "Discussion", tint = IndigoGlow)
-                                }
-                                // Right Sidebar toggle for Questions
-                                IconButton(onClick = { coroutineScope.launch { drawerState.open() } }) {
-                                    Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "Questions (Right Sidebar)", tint = AmberGlow)
-                                }
-                                // 3-State Fullscreen Toggle
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = { isAttachmentsSheetOpen = true }) {
+                                Icon(Icons.Default.Attachment, contentDescription = "Attachments", tint = EmeraldSync)
+                            }
+                            IconButton(onClick = { isQuestionsSheetOpen = true }) {
+                                Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "Questions", tint = AmberGlow)
+                            }
+                            IconButton(onClick = { isCommentsSheetOpen = true }) {
+                                Icon(Icons.Default.ChatBubbleOutline, contentDescription = "Discussion", tint = IndigoGlow)
+                            }
+                            IconButton(onClick = { coroutineScope.launch { rightTabsDrawerState.open() } }) {
+                                Icon(Icons.Default.Layers, contentDescription = "Tabs", tint = ElectricViolet)
+                            }
+                            if (hasAttachment) {
                                 IconButton(onClick = {
                                     viewportMode = when (viewportMode) {
                                         ViewportMode.SPLIT -> ViewportMode.ATTACHMENT_FULL
@@ -161,45 +197,52 @@ fun WorkspaceScreen(
                                         ViewportMode.EDITOR_FULL -> ViewportMode.SPLIT
                                     }
                                 }) {
-                                    val (icon, desc) = when (viewportMode) {
-                                        ViewportMode.SPLIT -> Icons.Default.ViewAgenda to "Split View"
-                                        ViewportMode.ATTACHMENT_FULL -> Icons.Default.Fullscreen to "Attachment Fullscreen"
-                                        ViewportMode.EDITOR_FULL -> Icons.Default.EditNote to "Editor Fullscreen"
+                                    val icon = when (viewportMode) {
+                                        ViewportMode.SPLIT -> Icons.Default.ViewAgenda
+                                        ViewportMode.ATTACHMENT_FULL -> Icons.Default.Fullscreen
+                                        ViewportMode.EDITOR_FULL -> Icons.Default.EditNote
                                     }
-                                    Icon(icon, contentDescription = desc, tint = TextPrimary)
+                                    Icon(icon, contentDescription = "Viewport Mode", tint = TextPrimary)
                                 }
-                            },
-                            colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
-                        )
-                    },
-                    floatingActionButton = {
-                        if (activeCanvas != null && activeCanvas.kind == "html" && viewportMode != ViewportMode.EDITOR_FULL) {
-                            FloatingActionButton(
-                                onClick = { showHtmlCodeEditor = true },
-                                containerColor = IndigoAccent,
-                                contentColor = TextPrimary,
-                                modifier = Modifier.padding(bottom = 56.dp)
-                            ) {
-                                Row(modifier = Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Code, contentDescription = "Edit Code", modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("HTML Code", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
+                    )
+                }
+            ) { innerPadding ->
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .background(SpaceBlack)
+                ) {
+                    val totalHeight = maxHeight
+                    val density = LocalDensity.current
+
+                    if (!hasAttachment) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(SpaceBlack)
+                        ) {
+                            if (!isEditorReady) {
+                                EditorSkeleton()
+                            } else {
+                                activePage?.let { page ->
+                                    ComposeLexicalEditor(
+                                        initialMarkdown = page.notes,
+                                        onContentChanged = { updatedNotes ->
+                                            onSaveNotes(page.id, updatedNotes)
+                                        },
+                                        onTimestampClicked = { seconds ->
+                                            Toast.makeText(context, "Timestamp: ${seconds}s", Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
                                 }
                             }
                         }
-                    }
-                ) { innerPadding ->
-                    BoxWithConstraints(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding)
-                            .background(SpaceBlack)
-                    ) {
-                        val totalHeight = maxHeight
-                        val density = LocalDensity.current
-
+                    } else {
                         Column(modifier = Modifier.fillMaxSize()) {
-                            // Top Simulation / Attachment Viewport
                             if (viewportMode != ViewportMode.EDITOR_FULL) {
                                 val simHeight = if (viewportMode == ViewportMode.ATTACHMENT_FULL) totalHeight else totalHeight * splitRatio
                                 Box(
@@ -208,11 +251,9 @@ fun WorkspaceScreen(
                                         .height(simHeight)
                                         .background(Color.Black)
                                 ) {
-                                    // When dragging the splitter or during initial 1.8s delay, render smooth skeleton instead of WebView
-                                    if (isDraggingSplitter || !isAttachmentReady) {
-                                        SimulationSkeleton(
-                                            label = if (isDraggingSplitter) "Adjusting viewport..." else "Loading celestial dynamics..."
-                                        )
+                                    val canvas = attachedCanvas
+                                    if (isDraggingSplitter || !isAttachmentReady || canvas == null) {
+                                        SimulationSkeleton(label = "Rendering ${canvas?.title ?: "attachment"}...")
                                     } else {
                                         AndroidView(
                                             factory = { ctx ->
@@ -234,31 +275,81 @@ fun WorkspaceScreen(
                                                     webChromeClient = WebChromeClient()
                                                     webViewClient = WebViewClient()
 
-                                                    if (activeCanvas != null && activeCanvas.kind == "youtube") {
-                                                        val ytEmbed = "https://www.youtube.com/embed/${activeCanvas.payloadJson}?enablejsapi=1"
-                                                        loadUrl(ytEmbed)
-                                                    } else if (activeCanvas != null && activeCanvas.payloadJson.isNotBlank()) {
-                                                        loadDataWithBaseURL("https://localhost/", activeCanvas.payloadJson, "text/html", "UTF-8", null)
+                                                    if (canvas.kind == "youtube") {
+                                                        val ytId = extractYouTubeId(canvas.payloadJson)
+                                                        loadUrl("https://www.youtube.com/embed/$ytId?enablejsapi=1")
                                                     } else {
-                                                        loadUrl("file:///android_asset/workspace/sim_default.html")
+                                                        loadDataWithBaseURL("https://localhost/", canvas.payloadJson, "text/html", "UTF-8", null)
                                                     }
                                                     simWebView = this
                                                 }
                                             },
                                             update = { wv ->
-                                                if (activeCanvas != null && activeCanvas.kind == "youtube") {
-                                                    wv.loadUrl("https://www.youtube.com/embed/${activeCanvas.payloadJson}?enablejsapi=1")
-                                                } else if (activeCanvas != null && activeCanvas.payloadJson.isNotBlank()) {
-                                                    wv.loadDataWithBaseURL("https://localhost/", activeCanvas.payloadJson, "text/html", "UTF-8", null)
+                                                if (canvas.kind == "youtube") {
+                                                    val ytId = extractYouTubeId(canvas.payloadJson)
+                                                    wv.loadUrl("https://www.youtube.com/embed/$ytId?enablejsapi=1")
+                                                } else {
+                                                    wv.loadDataWithBaseURL("https://localhost/", canvas.payloadJson, "text/html", "UTF-8", null)
                                                 }
                                             },
                                             modifier = Modifier.fillMaxSize()
                                         )
                                     }
+
+                                    Row(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(10.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.Black.copy(alpha = 0.75f),
+                                            border = BorderStroke(1.dp, BorderSlate),
+                                            shadowElevation = 6.dp
+                                        ) {
+                                            IconButton(
+                                                onClick = {
+                                                    if (attachedCanvas?.kind == "html") {
+                                                        showHtmlCodeEditor = true
+                                                    } else {
+                                                        editYouTubeUrlBuffer = attachedCanvas?.payloadJson ?: ""
+                                                        showEditYouTubeDialog = true
+                                                    }
+                                                },
+                                                modifier = Modifier.size(34.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Edit,
+                                                    contentDescription = "Edit Attachment",
+                                                    tint = IndigoGlow,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.Black.copy(alpha = 0.75f),
+                                            border = BorderStroke(1.dp, BorderSlate),
+                                            shadowElevation = 6.dp
+                                        ) {
+                                            IconButton(
+                                                onClick = { showDeleteConfirmDialog = true },
+                                                modifier = Modifier.size(34.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Delete,
+                                                    contentDescription = "Delete Attachment",
+                                                    tint = RoseRuby,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
-                            // Touch Splitter Handle with Drag detection
                             if (viewportMode == ViewportMode.SPLIT) {
                                 Box(
                                     modifier = Modifier
@@ -291,7 +382,6 @@ fun WorkspaceScreen(
                                 }
                             }
 
-                            // Bottom Content Viewport (Editor starts rendering at 1.0s)
                             if (viewportMode != ViewportMode.ATTACHMENT_FULL) {
                                 Box(
                                     modifier = Modifier
@@ -309,7 +399,7 @@ fun WorkspaceScreen(
                                                     onSaveNotes(page.id, updatedNotes)
                                                 },
                                                 onTimestampClicked = { seconds ->
-                                                    Toast.makeText(context, "Seeking visual companion to ${seconds}s", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, "Seeking companion to ${seconds}s", Toast.LENGTH_SHORT).show()
                                                     simWebView?.evaluateJavascript(
                                                         "if (window.seekTo) { window.seekTo($seconds); }",
                                                         null
@@ -322,53 +412,136 @@ fun WorkspaceScreen(
                             }
                         }
                     }
+                }
 
-                    // Sheets & Modals
-                    if (isChaptersSheetOpen) {
-                        ChapterBottomSheet(
-                            pages = pages,
-                            activePageIndex = activePageIndex,
-                            onDismiss = { isChaptersSheetOpen = false },
-                            onSelectPage = onSelectPage,
-                            onCreatePage = onCreatePage,
-                            onDeletePage = onDeletePage
-                        )
-                    }
+                if (showDeleteConfirmDialog && attachedCanvas != null) {
+                    AlertDialog(
+                        onDismissRequest = { showDeleteConfirmDialog = false },
+                        title = { Text("Delete Attachment", color = TextPrimary) },
+                        text = {
+                            Text(
+                                "Are you sure you want to remove the companion attachment '${attachedCanvas?.title}' from this chapter?",
+                                color = TextSecondary,
+                                fontSize = 13.sp
+                            )
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    attachedCanvas?.let { onDeleteCanvas(it.id) }
+                                    showDeleteConfirmDialog = false
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = RoseRuby)
+                            ) {
+                                Text("Delete")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                                Text("Cancel", color = TextSecondary)
+                            }
+                        },
+                        containerColor = CosmicSlate
+                    )
+                }
 
-                    if (isAttachmentsSheetOpen) {
-                        AttachmentsBottomSheet(
-                            canvases = canvases,
-                            selectedIndex = selectedCanvasIndex,
-                            onSelectCanvas = { idx -> selectedCanvasIndex = idx },
-                            onAddAttachment = onAttachCanvas,
-                            onDeleteAttachment = onDeleteCanvas,
-                            onDismiss = { isAttachmentsSheetOpen = false }
-                        )
-                    }
+                if (showEditYouTubeDialog && attachedCanvas != null) {
+                    AlertDialog(
+                        onDismissRequest = { showEditYouTubeDialog = false },
+                        title = { Text("Edit YouTube URL", color = TextPrimary) },
+                        text = {
+                            OutlinedTextField(
+                                value = editYouTubeUrlBuffer,
+                                onValueChange = { editYouTubeUrlBuffer = it },
+                                label = { Text("YouTube URL") },
+                                placeholder = { Text("https://www.youtube.com/watch?v=...") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    if (editYouTubeUrlBuffer.isNotBlank()) {
+                                        attachedCanvas?.let { onUpdateCanvasPayload(it.id, editYouTubeUrlBuffer.trim()) }
+                                        showEditYouTubeDialog = false
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldSync)
+                            ) {
+                                Text("Save")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showEditYouTubeDialog = false }) {
+                                Text("Cancel", color = TextSecondary)
+                            }
+                        },
+                        containerColor = CosmicSlate
+                    )
+                }
 
-                    if (isCommentsSheetOpen) {
-                        CommentsBottomSheet(
-                            chapterTitle = activePage?.title ?: "Chapter",
-                            onDismiss = { isCommentsSheetOpen = false }
-                        )
-                    }
+                if (isAttachmentsSheetOpen) {
+                    val selectedIdx = canvases.indexOf(attachedCanvas).coerceAtLeast(0)
+                    AttachmentsBottomSheet(
+                        canvases = canvases,
+                        selectedIndex = if (canvases.isEmpty()) 0 else selectedIdx,
+                        onSelectCanvas = { idx ->
+                            val c = canvases.getOrNull(idx)
+                            if (c != null) {
+                                onAssignCanvasToPage(c.id)
+                                isAttachmentsSheetOpen = false
+                            }
+                        },
+                        onAddAttachment = { title, kind, payload ->
+                            onAttachCanvas(title, kind, payload)
+                        },
+                        onDeleteAttachment = onDeleteCanvas,
+                        onDismiss = { isAttachmentsSheetOpen = false }
+                    )
+                }
 
-                    if (showHtmlCodeEditor && activeCanvas != null) {
-                        HtmlCodeEditorScreen(
-                            title = activeCanvas.title,
-                            initialCode = activeCanvas.payloadJson.ifBlank {
-                                "<!DOCTYPE html>\n<html>\n<head>\n  <style>body { background: #020617; color: #818cf8; }</style>\n</head>\n<body>\n  <h1>Custom Simulation</h1>\n</body>\n</html>"
-                            },
-                            onSaveAndRun = { newCode ->
-                                onUpdateCanvasPayload(activeCanvas.id, newCode)
-                                simWebView?.loadDataWithBaseURL("https://localhost/", newCode, "text/html", "UTF-8", null)
-                                showHtmlCodeEditor = false
-                            },
-                            onDismiss = { showHtmlCodeEditor = false }
-                        )
-                    }
+                if (isQuestionsSheetOpen) {
+                    QuestionsBottomSheet(
+                        questions = questions,
+                        onDismiss = { isQuestionsSheetOpen = false },
+                        onCreateQuestion = onCreateQuestion,
+                        onDeleteQuestion = onDeleteQuestion,
+                        onOpenQuestionEditor = { q ->
+                            isQuestionsSheetOpen = false
+                            onOpenQuestionEditor(q)
+                        }
+                    )
+                }
+
+                if (isCommentsSheetOpen) {
+                    CommentsBottomSheet(
+                        chapterTitle = activePage?.title ?: "Chapter",
+                        onDismiss = { isCommentsSheetOpen = false }
+                    )
+                }
+
+                if (showHtmlCodeEditor && attachedCanvas != null) {
+                    HtmlCodeEditorScreen(
+                        title = attachedCanvas?.title ?: "HTML",
+                        initialCode = attachedCanvas?.payloadJson?.ifBlank {
+                            "<!DOCTYPE html>\n<html>\n<head>\n  <style>body { background: #020617; color: #818cf8; }</style>\n</head>\n<body>\n  <h1>Custom Simulation</h1>\n</body>\n</html>"
+                        } ?: "",
+                        onSaveAndRun = { newCode ->
+                            attachedCanvas?.let { onUpdateCanvasPayload(it.id, newCode) }
+                            simWebView?.loadDataWithBaseURL("https://localhost/", newCode, "text/html", "UTF-8", null)
+                            showHtmlCodeEditor = false
+                        },
+                        onDismiss = { showHtmlCodeEditor = false }
+                    )
                 }
             }
         }
     }
+}
+
+private fun extractYouTubeId(url: String): String {
+    val trimmed = url.trim()
+    val pattern = Regex("(?:youtube\\.com\\/(?:[^/]+\\/.+\\/|(?:v|e(?:mbed)?|shorts|live)\\/|.*[?&]v=)|youtu\\.be\\/)([^\"&?/\\s]{11})")
+    val match = pattern.find(trimmed)
+    return match?.groupValues?.get(1) ?: trimmed.takeIf { it.length == 11 } ?: trimmed
 }

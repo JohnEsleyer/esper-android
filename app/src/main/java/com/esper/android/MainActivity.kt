@@ -1,6 +1,5 @@
 package com.esper.android
 
-import android.app.Activity
 import android.content.Context
 import android.os.Bundle
 import android.util.Log
@@ -35,6 +34,8 @@ import com.google.android.gms.common.api.ApiException
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.userProfileChangeRequest
+import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -64,6 +65,9 @@ class MainActivity : ComponentActivity() {
                 var activeEditingQuestion by remember { mutableStateOf<QuestionEntity?>(null) }
                 var showSettingsDialog by remember { mutableStateOf(false) }
 
+                // Tabs management: list of open notebook ids
+                var openTabIds by remember { mutableStateOf<List<String>>(listOf("kepler-001")) }
+
                 var currentUser by remember { mutableStateOf<FirebaseUser?>(auth.currentUser) }
                 var isOfflineMode by remember { mutableStateOf(false) }
 
@@ -75,6 +79,20 @@ class MainActivity : ComponentActivity() {
                         }
                     } else {
                         prefs.edit().remove("firebase_jwt_token").apply()
+                    }
+                }
+
+                fun updateDisplayName(newName: String) {
+                    val user = auth.currentUser ?: return
+                    val request = userProfileChangeRequest { displayName = newName }
+                    user.updateProfile(request).addOnCompleteListener { task ->
+                        if (task.isSuccessful) {
+                            user.reload().addOnCompleteListener {
+                                currentUser = auth.currentUser
+                            }
+                        } else {
+                            Toast.makeText(applicationContext, "Name update failed: ${task.exception?.localizedMessage}", Toast.LENGTH_LONG).show()
+                        }
                     }
                 }
 
@@ -156,6 +174,10 @@ class MainActivity : ComponentActivity() {
                 val shelves by db.dao().observeAllShelves().collectAsState(initial = emptyList())
                 val allDetails by db.dao().observeAllNotebooksWithDetails().collectAsState(initial = emptyList())
 
+                val openNotebooks = remember(notebooks, openTabIds) {
+                    notebooks.filter { openTabIds.contains(it.id) }
+                }
+
                 // Seed demo notebook on first run
                 LaunchedEffect(Unit) {
                     coroutineScope.launch {
@@ -215,6 +237,23 @@ class MainActivity : ComponentActivity() {
                                         position = p.position ?: idx
                                     )
                                 }?.let { db.dao().upsertPages(it) }
+
+                                r.canvases?.map { c ->
+                                    val payload = when (val d = c.data) {
+                                        is Map<*, *> -> (d["code"] ?: d["url"] ?: "").toString()
+                                        is String -> d
+                                        else -> Gson().toJson(d)
+                                    }
+                                    CanvasEntity(
+                                        id = c.id,
+                                        notebookId = r.id,
+                                        kind = c.type,
+                                        title = c.title,
+                                        payloadJson = payload,
+                                        assignedPagesCsv = c.assignedPages?.joinToString(",") ?: ""
+                                    )
+                                }?.let { db.dao().upsertCanvases(it) }
+
                                 r.questions?.mapIndexed { idx, q ->
                                     QuestionEntity(
                                         id = q.id,
@@ -273,6 +312,9 @@ class MainActivity : ComponentActivity() {
                             currentUser = currentUser,
                             onSignOut = { signOut() },
                             onOpenNotebook = { id ->
+                                if (!openTabIds.contains(id)) {
+                                    openTabIds = openTabIds + id
+                                }
                                 activeNotebookId = id
                                 activePageIndex = 0
                             },
@@ -299,6 +341,9 @@ class MainActivity : ComponentActivity() {
                                             position = 0
                                         )
                                     )
+                                    openTabIds = openTabIds + newId
+                                    activeNotebookId = newId
+                                    activePageIndex = 0
                                     launch(Dispatchers.IO) {
                                         try {
                                             api.createNote(mapOf("id" to newId, "title" to title, "description" to desc))
@@ -309,6 +354,7 @@ class MainActivity : ComponentActivity() {
                             onDeleteNotebook = { id ->
                                 coroutineScope.launch {
                                     db.dao().deleteNotebook(id)
+                                    openTabIds = openTabIds - id
                                     launch(Dispatchers.IO) {
                                         try { api.deleteNote(id) } catch (_: Exception) {}
                                     }
@@ -333,7 +379,8 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             },
-                            onSyncWithRemote = { syncWithCloud() }
+                            onSyncWithRemote = { syncWithCloud() },
+                            onUpdateDisplayName = { newName -> updateDisplayName(newName) }
                         )
                     }
 
@@ -347,6 +394,24 @@ class MainActivity : ComponentActivity() {
                                 canvases = book.canvases,
                                 questions = book.questions,
                                 activePageIndex = activePageIndex,
+                                openNotebooks = openNotebooks,
+                                activeNotebookId = activeNotebookId!!,
+                                onSelectTab = { selectedId ->
+                                    activeNotebookId = selectedId
+                                    activePageIndex = 0
+                                },
+                                onCloseTab = { closedId ->
+                                    val remaining = openTabIds - closedId
+                                    openTabIds = remaining
+                                    if (activeNotebookId == closedId) {
+                                        activeNotebookId = remaining.lastOrNull()
+                                        activePageIndex = 0
+                                    }
+                                },
+                                onCloseAllTabs = {
+                                    openTabIds = emptyList()
+                                    activeNotebookId = null
+                                },
                                 onNavigateBack = { activeNotebookId = null },
                                 onSelectPage = { idx -> activePageIndex = idx },
                                 onCreatePage = { title, parentId ->
@@ -393,13 +458,15 @@ class MainActivity : ComponentActivity() {
                                 onAttachCanvas = { title, kind, payload ->
                                     coroutineScope.launch {
                                         val canvasId = "c-${UUID.randomUUID().toString().take(8)}"
+                                        val activePageId = book.pages.getOrNull(activePageIndex)?.id ?: ""
                                         db.dao().upsertCanvas(
                                             CanvasEntity(
                                                 id = canvasId,
                                                 notebookId = book.notebook.id,
                                                 kind = kind,
                                                 title = title,
-                                                payloadJson = payload
+                                                payloadJson = payload,
+                                                assignedPagesCsv = activePageId
                                             )
                                         )
                                     }
@@ -414,6 +481,17 @@ class MainActivity : ComponentActivity() {
                                         val existing = book.canvases.find { it.id == canvasId }
                                         if (existing != null) {
                                             db.dao().upsertCanvas(existing.copy(payloadJson = payload))
+                                        }
+                                    }
+                                },
+                                onAssignCanvasToPage = { canvasId ->
+                                    coroutineScope.launch {
+                                        val existing = book.canvases.find { it.id == canvasId }
+                                        val activePageId = book.pages.getOrNull(activePageIndex)?.id
+                                        if (existing != null && activePageId != null) {
+                                            val assigned = existing.assignedPagesCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+                                            assigned.add(activePageId)
+                                            db.dao().upsertCanvas(existing.copy(assignedPagesCsv = assigned.joinToString(",")))
                                         }
                                     }
                                 },
