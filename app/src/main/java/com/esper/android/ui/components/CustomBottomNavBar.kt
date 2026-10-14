@@ -33,7 +33,7 @@ fun CustomBottomNavBar(
     totalBooksCount: Int,
     onPageSelected: (Int) -> Unit,
     onOpenLibrary: () -> Unit,
-    onOpenTags: () -> Unit,
+    onOpenJournal: () -> Unit,
     onOpenTabs: () -> Unit,
     onOpenCreateBook: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -164,12 +164,12 @@ fun CustomBottomNavBar(
 
                 NavigationBarItem(
                     selected = false,
-                    onClick = onOpenTags,
-                    icon = { Icon(Icons.Default.Tag, contentDescription = "Tags", modifier = Modifier.size(19.dp)) },
-                    label = { Text("Tags", fontSize = 10.sp) },
+                    onClick = onOpenJournal,
+                    icon = { Icon(Icons.Default.EditNote, contentDescription = "Journal", modifier = Modifier.size(21.dp)) },
+                    label = { Text("Journal", fontSize = 10.sp) },
                     colors = NavigationBarItemDefaults.colors(
-                        unselectedIconColor = TextMuted,
-                        unselectedTextColor = TextMuted
+                        unselectedIconColor = IndigoGlow,
+                        unselectedTextColor = IndigoGlow
                     )
                 )
 

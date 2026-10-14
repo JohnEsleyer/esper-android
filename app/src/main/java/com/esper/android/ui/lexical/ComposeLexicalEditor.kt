@@ -72,6 +72,13 @@ fun ComposeLexicalEditor(
     var isRawEditMode by remember { mutableStateOf(false) }
     var debounceJob by remember { mutableStateOf<Job?>(null) }
 
+    // A pending debounce belongs to the previous chapter instance: cancel it
+    // on chapter switch / dispose so it can never PATCH the new page with
+    // stale text after the 300ms window.
+    DisposableEffect(initialMarkdown) {
+        onDispose { debounceJob?.cancel() }
+    }
+
     fun commit(newText: String) {
         rawText = newText
         blocks = LexicalParser.parseToLexicalAst(newText)

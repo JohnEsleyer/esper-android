@@ -62,6 +62,7 @@ fun BookshelfScreen(
     onOpenTabsScreen: () -> Unit,
     onOpenSettingsScreen: () -> Unit,
     onOpenCreateNotebookScreen: () -> Unit,
+    onOpenJournalScreen: () -> Unit,
     onDeleteShelf: (String) -> Unit,
     onSyncWithRemote: () -> Unit
 ) {
@@ -75,9 +76,10 @@ fun BookshelfScreen(
     val pageSize = 6
     var currentPage by remember { mutableIntStateOf(1) }
 
-    // Books are strictly ordered latest to oldest
+    // Books are strictly ordered latest to oldest; the journal is a
+    // standalone workspace and never clutters the bookshelf grid.
     val sortedNotebooks = remember(notebooks) {
-        notebooks.sortedByDescending { it.updatedAt }
+        notebooks.filter { it.id != "esper-journal" }.sortedByDescending { it.updatedAt }
     }
 
     val filtered = remember(sortedNotebooks, selectedTagFilter, searchQuery, selectedShelfId, shelves) {
@@ -351,7 +353,7 @@ fun BookshelfScreen(
                     totalBooksCount = filtered.size,
                     onPageSelected = { currentPage = it },
                     onOpenLibrary = { onSelectTagFilter("All") },
-                    onOpenTags = onOpenAllTagsScreen,
+                    onOpenJournal = onOpenJournalScreen,
                     onOpenTabs = onOpenTabsScreen,
                     onOpenCreateBook = onOpenCreateNotebookScreen,
                     onOpenSettings = onOpenSettingsScreen
@@ -368,7 +370,7 @@ fun BookshelfScreen(
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     val quickTags = remember(notebooks) {
-                        val extracted = notebooks.flatMap { it.tagsCsv.split(",") }
+                        val extracted = notebooks.filter { it.id != "esper-journal" }.flatMap { it.tagsCsv.split(",") }
                             .map { it.trim() }
                             .filter { it.isNotEmpty() }
                             .distinct()
@@ -413,6 +415,61 @@ fun BookshelfScreen(
                                     fontWeight = FontWeight.Medium,
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                                 )
+                            }
+                        }
+                    }
+
+                    // Prominent shelf heading: what shelf am I in?
+                    val currentShelf = remember(shelves, selectedShelfId) {
+                        shelves.find { it.id == selectedShelfId }
+                    }
+                    val shelfTitle = currentShelf?.title ?: "All Notebooks"
+                    val shelfColor = remember(currentShelf) {
+                        try {
+                            currentShelf?.let { Color(android.graphics.Color.parseColor(it.color)) } ?: IndigoAccent
+                        } catch (_: Exception) { IndigoAccent }
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(10.dp)
+                                            .clip(CircleShape)
+                                            .background(shelfColor)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = shelfTitle,
+                                        color = TextPrimary,
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        maxLines = 1
+                                    )
+                                }
+                                Text(
+                                    text = "${filtered.size} books available",
+                                    color = TextMuted,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(start = 18.dp)
+                                )
+                            }
+                            if (selectedShelfId != null) {
+                                TextButton(
+                                    onClick = { selectedShelfId = null },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Text("Clear filter", color = IndigoGlow, fontSize = 11.sp)
+                                }
                             }
                         }
                     }

@@ -66,6 +66,12 @@ interface EsperDao {
     @Query("UPDATE pages SET notes = :notes WHERE id = :pageId")
     suspend fun updatePageNotes(pageId: String, notes: String)
 
+    @Query("UPDATE pages SET notes = :notes, title = :title WHERE id = :pageId")
+    suspend fun updatePageNotesAndTitle(pageId: String, notes: String, title: String)
+
+    @Query("UPDATE notebooks SET updatedAt = :updatedAt WHERE id = :notebookId")
+    suspend fun updateNotebookUpdatedAt(notebookId: String, updatedAt: Long)
+
     @Query("UPDATE pages SET title = :title WHERE id = :pageId")
     suspend fun updatePageTitle(pageId: String, title: String)
 

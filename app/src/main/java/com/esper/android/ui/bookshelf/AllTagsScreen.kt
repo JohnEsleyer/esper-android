@@ -159,6 +159,14 @@ fun AllTagsScreen(
                         shape = RoundedCornerShape(12.dp),
                         color = if (isSelected) Color(0xFF312E81) else CosmicSlate,
                         border = BorderStroke(1.dp, if (isSelected) IndigoGlow else BorderSlate),
+                        // Tapping the row selects the filter and returns to bookshelf.
+                        // Disabled while renaming so text-field taps don't navigate away.
+                        onClick = {
+                            if (editingTag == null) {
+                                onSelectTag(tag)
+                                onNavigateBack()
+                            }
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                     ) {
@@ -207,11 +215,7 @@ fun AllTagsScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
-                                    color = SurfaceSlate,
-                                    onClick = {
-                                        onSelectTag(tag)
-                                        onNavigateBack()
-                                    }
+                                    color = SurfaceSlate
                                 ) {
                                     Text(
                                         text = "$count books",

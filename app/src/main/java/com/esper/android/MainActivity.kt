@@ -12,6 +12,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import androidx.room.Room
+import com.esper.android.data.crypto.CryptoEngine
 import com.esper.android.data.export.ZipExporter
 import com.esper.android.data.local.EsperDatabase
 import com.esper.android.data.model.*
@@ -21,6 +22,7 @@ import com.esper.android.ui.bookshelf.AllTagsScreen
 import com.esper.android.ui.bookshelf.BookshelfScreen
 import com.esper.android.ui.bookshelf.CreateNotebookScreen
 import com.esper.android.ui.bookshelf.SettingsScreen
+import com.esper.android.ui.journal.JournalScreen
 import com.esper.android.ui.theme.EsperTheme
 import com.esper.android.ui.workspace.QuestionEditorScreen
 import com.esper.android.ui.workspace.TabsScreen
@@ -44,7 +46,8 @@ enum class ActiveScreen {
     SETTINGS,
     CREATE_NOTEBOOK,
     TABS,
-    WORKSPACE
+    WORKSPACE,
+    JOURNAL
 }
 
 class MainActivity : ComponentActivity() {
@@ -185,7 +188,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val allTags = remember(notebooks, customTags) {
-                    val extracted = notebooks.flatMap { it.tagsCsv.split(",") }
+                    val extracted = notebooks.filter { it.id != "esper-journal" }.flatMap { it.tagsCsv.split(",") }
                         .map { it.trim() }
                         .filter { it.isNotEmpty() }
                     listOf("All") + (customTags + extracted).distinct()
@@ -215,6 +218,33 @@ class MainActivity : ComponentActivity() {
                                         notes = "# Introduction to Celestial Dynamics\n\nWelcome to **Esper** on Android!\n",
                                         position = 0
                                     )
+                                )
+                            )
+                        }
+                        // Single-book journal seed (deterministic id shared with web).
+                        val existingJournal = db.dao().getNotebookById("esper-journal")
+                        if (existingJournal == null) {
+                            val dateStr = try {
+                                java.text.SimpleDateFormat("EEE, MMM d", java.util.Locale.getDefault()).format(java.util.Date())
+                            } catch (_: Exception) { "Today" }
+                            db.dao().upsertNotebook(
+                                NotebookEntity(
+                                    id = "esper-journal",
+                                    title = "Personal Journal",
+                                    description = "Single book dumping ground for quick ideas",
+                                    ownerSub = "*",
+                                    visibility = "restricted",
+                                    tagsCsv = "Journal",
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
+                            db.dao().upsertPage(
+                                PageEntity(
+                                    id = "jp-1",
+                                    notebookId = "esper-journal",
+                                    title = dateStr,
+                                    notes = "# $dateStr\n\nJot down ideas and quick thoughts here...",
+                                    position = 0
                                 )
                             )
                         }
@@ -312,6 +342,70 @@ class MainActivity : ComponentActivity() {
                             onDeleteTag = { tag ->
                                 customTags = customTags.filter { it != tag }
                                 if (selectedTagFilter == tag) selectedTagFilter = "All"
+                            },
+                            onNavigateBack = { popScreen() }
+                        )
+                    }
+
+                    currentScreen == ActiveScreen.JOURNAL -> {
+                        val journalDetails by db.dao().observeNotebookDetails("esper-journal").collectAsState(initial = null)
+                        val journalPages = remember(journalDetails) {
+                            (journalDetails?.pages ?: emptyList()).sortedBy { it.position }
+                        }
+                        JournalScreen(
+                            pages = journalPages,
+                            onSavePageNotes = { pageId, text ->
+                                coroutineScope.launch {
+                                    val derivedTitle = deriveChapterTitle(text)
+                                    db.dao().updatePageNotesAndTitle(pageId, text, derivedTitle)
+                                    db.dao().updateNotebookUpdatedAt("esper-journal", System.currentTimeMillis())
+                                    val uid = currentUser?.uid
+                                    launch(Dispatchers.IO) {
+                                        try {
+                                            var notesPayload: String = text
+                                            var titlePayload: String = derivedTitle
+                                            val isEncrypted = journalDetails?.notebook?.isEncrypted == true
+                                            if (isEncrypted && uid != null) {
+                                                try {
+                                                    val key = CryptoEngine.deriveKey(uid)
+                                                    notesPayload = CryptoEngine.encrypt(text, key)
+                                                    titlePayload = CryptoEngine.encrypt(derivedTitle, key)
+                                                } catch (_: Exception) {}
+                                            }
+                                            api.patchPage("esper-journal", pageId, mapOf("notes" to notesPayload, "title" to titlePayload))
+                                        } catch (e: Exception) {
+                                            Log.w("EsperSync", "journal patch failed for $pageId", e)
+                                        }
+                                    }
+                                }
+                            },
+                            onCreateNewPage = { dateTitle ->
+                                coroutineScope.launch {
+                                    val newPageId = "jp-${UUID.randomUUID().toString().take(8)}"
+                                    db.dao().upsertPage(
+                                        PageEntity(
+                                            id = newPageId,
+                                            notebookId = "esper-journal",
+                                            title = dateTitle,
+                                            notes = "# $dateTitle\n\n",
+                                            position = journalPages.size
+                                        )
+                                    )
+                                    db.dao().updateNotebookUpdatedAt("esper-journal", System.currentTimeMillis())
+                                    launch(Dispatchers.IO) {
+                                        try {
+                                            api.createPage("esper-journal", mapOf("id" to newPageId, "title" to dateTitle, "notes" to "# $dateTitle\n\n"))
+                                        } catch (_: Exception) {}
+                                    }
+                                }
+                            },
+                            onDeletePage = { pageId ->
+                                coroutineScope.launch {
+                                    db.dao().deletePageAndChildren(pageId)
+                                    launch(Dispatchers.IO) {
+                                        try { api.deletePage("esper-journal", pageId) } catch (_: Exception) {}
+                                    }
+                                }
                             },
                             onNavigateBack = { popScreen() }
                         )
@@ -458,11 +552,33 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onSaveNotes = { pageId, text ->
                                     coroutineScope.launch {
-                                        db.dao().updatePageNotes(pageId, text)
+                                        // Parity with web extractFirstLineTitle: keep sidebar
+                                        // title in sync with the first markdown line.
+                                        val derivedTitle = deriveChapterTitle(text)
+                                        db.dao().updatePageNotesAndTitle(pageId, text, derivedTitle)
+                                        db.dao().updateNotebookUpdatedAt(book.notebook.id, System.currentTimeMillis())
+                                        val uid = currentUser?.uid
                                         launch(Dispatchers.IO) {
                                             try {
-                                                api.patchPage(book.notebook.id, pageId, mapOf("notes" to text))
-                                            } catch (_: Exception) {}
+                                                // Zero-knowledge parity: encrypt before PATCH
+                                                // when the book is flagged encrypted.
+                                                var notesPayload: String = text
+                                                var titlePayload: String = derivedTitle
+                                                if (book.notebook.isEncrypted && uid != null) {
+                                                    try {
+                                                        val key = CryptoEngine.deriveKey(uid)
+                                                        notesPayload = CryptoEngine.encrypt(text, key)
+                                                        titlePayload = CryptoEngine.encrypt(derivedTitle, key)
+                                                    } catch (_: Exception) {}
+                                                }
+                                                api.patchPage(
+                                                    book.notebook.id,
+                                                    pageId,
+                                                    mapOf("notes" to notesPayload, "title" to titlePayload)
+                                                )
+                                            } catch (e: Exception) {
+                                                Log.w("EsperSync", "patchPage failed for $pageId", e)
+                                            }
                                         }
                                     }
                                 },
@@ -556,6 +672,7 @@ class MainActivity : ComponentActivity() {
                             onOpenTabsScreen = { navigateTo(ActiveScreen.TABS) },
                             onOpenSettingsScreen = { navigateTo(ActiveScreen.SETTINGS) },
                             onOpenCreateNotebookScreen = { navigateTo(ActiveScreen.CREATE_NOTEBOOK) },
+                            onOpenJournalScreen = { navigateTo(ActiveScreen.JOURNAL) },
                             onDeleteShelf = { id ->
                                 coroutineScope.launch {
                                     db.dao().deleteShelf(id)
@@ -571,4 +688,21 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+}
+
+/**
+ * Web parity (presets.extractFirstLineTitle): first non-empty markdown line,
+ * stripped of heading/quote/list markers, max 100 chars.
+ */
+private fun deriveChapterTitle(markdown: String): String {
+    val firstLine = markdown.lineSequence()
+        .map { it.trim() }
+        .firstOrNull { it.isNotEmpty() }
+        ?: return "Untitled Chapter"
+    val stripped = firstLine
+        .replace(Regex("^[#\\s*_\\->`]+"), "")
+        .replace(Regex("[#\\s*_\\->`]+$"), "")
+        .trim()
+        .take(100)
+    return stripped.ifEmpty { "Untitled Chapter" }
 }

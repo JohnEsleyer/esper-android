@@ -215,6 +215,7 @@ fun WorkspaceScreen(
                             EditorSkeleton()
                         } else {
                             activePage?.let { page ->
+                                key(page.id) {
                                 ComposeLexicalEditor(
                                     initialMarkdown = page.notes,
                                     onContentChanged = { updatedNotes ->
@@ -224,6 +225,7 @@ fun WorkspaceScreen(
                                         Toast.makeText(context, "Timestamp: ${seconds}s", Toast.LENGTH_SHORT).show()
                                     }
                                 )
+                                }
                             }
                         }
                     }
@@ -366,6 +368,7 @@ fun WorkspaceScreen(
                                     EditorSkeleton()
                                 } else {
                                     activePage?.let { page ->
+                                        key(page.id) {
                                         ComposeLexicalEditor(
                                             initialMarkdown = page.notes,
                                             onContentChanged = { updatedNotes ->
@@ -380,6 +383,7 @@ fun WorkspaceScreen(
                                                 )
                                             }
                                         )
+                                        }
                                     }
                                 }
                             }
