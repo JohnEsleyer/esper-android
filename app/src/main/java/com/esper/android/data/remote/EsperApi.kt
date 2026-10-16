@@ -67,6 +67,13 @@ data class RemoteNotebook(
     val questions: List<RemoteQuestion>?
 )
 
+data class RemoteTabItem(
+    val docId: String,
+    val pageId: String,
+    val pageNumber: Int? = 1,
+    val updatedAt: Long? = null
+)
+
 data class RemoteShelf(
     val id: String,
     val title: String,
@@ -91,6 +98,12 @@ interface EsperApiService {
 
     @GET("user/notes")
     suspend fun getUserNotes(): List<RemoteNotebook>
+
+    @GET("user/tabs")
+    suspend fun getUserTabs(): List<RemoteTabItem>
+
+    @PUT("user/tabs")
+    suspend fun updateUserTabs(@Body body: Map<String, List<RemoteTabItem>>): SyncResult
 
     @GET("notes/{id}")
     suspend fun getNote(

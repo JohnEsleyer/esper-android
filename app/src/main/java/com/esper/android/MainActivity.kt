@@ -28,7 +28,10 @@ import com.esper.android.ui.bookshelf.CreateNotebookScreen
 import com.esper.android.ui.bookshelf.SettingsScreen
 import com.esper.android.ui.journal.JournalScreen
 import com.esper.android.ui.theme.EsperTheme
+import com.esper.android.data.remote.RemoteTabItem
 import com.esper.android.ui.workspace.QuestionEditorScreen
+import com.esper.android.ui.workspace.RecentPageItem
+import com.esper.android.ui.workspace.TabItemData
 import com.esper.android.ui.workspace.TabsScreen
 import com.esper.android.ui.workspace.WorkspaceScreen
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -84,9 +87,43 @@ class MainActivity : ComponentActivity() {
                 var activeEditingQuestion by remember { mutableStateOf<QuestionEntity?>(null) }
                 var selectedTagFilter by remember { mutableStateOf("All") }
 
-                var openTabIds by remember { mutableStateOf<List<String>>(listOf("kepler-001")) }
+                var openTabItems by remember {
+                    mutableStateOf(
+                        listOf(
+                            TabItemData(
+                                notebook = NotebookEntity(
+                                    id = "kepler-001",
+                                    title = "Kepler's Laws of Planetary Motion",
+                                    description = "Astrodynamics notebook with interactive elliptical simulations.",
+                                    ownerSub = "*",
+                                    tagsCsv = "Astrodynamics,Physics"
+                                ),
+                                pageNumber = 1,
+                                pageId = "p1"
+                            )
+                        )
+                    )
+                }
+                var recentPageItems by remember { mutableStateOf<List<RecentPageItem>>(emptyList()) }
                 var currentUser by remember { mutableStateOf<FirebaseUser?>(auth.currentUser) }
                 var isOfflineMode by remember { mutableStateOf(false) }
+
+                fun persistTabsToServer(items: List<TabItemData>) {
+                    if (currentUser == null) return
+                    coroutineScope.launch(Dispatchers.IO) {
+                        try {
+                            val payload = items.map {
+                                RemoteTabItem(
+                                    docId = it.notebook.id,
+                                    pageId = it.pageId ?: "p1",
+                                    pageNumber = it.pageNumber,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            }
+                            api.updateUserTabs(mapOf("tabs" to payload))
+                        } catch (_: Exception) {}
+                    }
+                }
 
                 fun navigateTo(screen: ActiveScreen) {
                     if (screen == ActiveScreen.BOOKSHELF) {
@@ -197,8 +234,30 @@ class MainActivity : ComponentActivity() {
                 val shelves by db.dao().observeAllShelves().collectAsState(initial = emptyList())
                 val allDetails by db.dao().observeAllNotebooksWithDetails().collectAsState(initial = emptyList())
 
-                val openNotebooks = remember(notebooks, openTabIds) {
-                    openTabIds.mapNotNull { id -> notebooks.find { it.id == id } }
+                // Fetch persisted tabs from server on sign-in (server wins when it has tabs).
+                LaunchedEffect(currentUser) {
+                    if (currentUser != null) {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                val serverTabs = api.getUserTabs()
+                                if (serverTabs.isNotEmpty()) {
+                                    val allBooks = db.dao().getAllNotebooksList()
+                                    val mapped = serverTabs.mapNotNull { st ->
+                                        allBooks.find { it.id == st.docId }?.let { nb ->
+                                            TabItemData(
+                                                notebook = nb,
+                                                pageNumber = (st.pageNumber ?: 1).coerceAtLeast(1),
+                                                pageId = st.pageId
+                                            )
+                                        }
+                                    }
+                                    if (mapped.isNotEmpty()) {
+                                        withContext(Dispatchers.Main) { openTabItems = mapped }
+                                    }
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    }
                 }
 
                 var customTags by remember {
@@ -295,9 +354,11 @@ class MainActivity : ComponentActivity() {
 
                             // Step B: Reconcile open tabs
                             withContext(Dispatchers.Main) {
-                                openTabIds = openTabIds.filter { remoteIds.contains(it) || it == "esper-journal" }
+                                openTabItems = openTabItems.filter { remoteIds.contains(it.notebook.id) || it.notebook.id == "esper-journal" }
                                 if (activeNotebookId != null && !remoteIds.contains(activeNotebookId) && activeNotebookId != "esper-journal") {
-                                    activeNotebookId = openTabIds.firstOrNull()
+                                    val next = openTabItems.lastOrNull()
+                                    activeNotebookId = next?.notebook?.id
+                                    activePageIndex = (next?.pageNumber ?: 1) - 1
                                 }
                             }
 
@@ -565,33 +626,83 @@ class MainActivity : ComponentActivity() {
                     }
 
                     currentScreen == ActiveScreen.TABS -> {
-                        // Preserve tab ordering by openTabIds recency
-                        val orderedOpenNotebooks = remember(notebooks, openTabIds) {
-                            openTabIds.mapNotNull { id -> notebooks.find { it.id == id } }
+                        // Resolve tab entities against loaded books; drop tabs for deleted books.
+                        val resolvedTabs = remember(openTabItems, notebooks) {
+                            openTabItems.filter { item ->
+                                notebooks.isEmpty() || notebooks.any { it.id == item.notebook.id }
+                            }.map { item ->
+                                val nb = notebooks.find { it.id == item.notebook.id } ?: item.notebook
+                                item.copy(notebook = nb)
+                            }
+                        }
+                        val resolvedRecent = remember(recentPageItems, notebooks) {
+                            recentPageItems.filter { item ->
+                                notebooks.isEmpty() || notebooks.any { it.id == item.notebook.id }
+                            }.map { item ->
+                                val nb = notebooks.find { it.id == item.notebook.id } ?: item.notebook
+                                item.copy(notebook = nb)
+                            }
+                        }
+
+                        fun selectTab(docId: String, pageIndex: Int) {
+                            val details = allDetails.find { it.notebook.id == docId }
+                            val pages = details?.pages ?: emptyList()
+                            val safeIndex = pageIndex.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
+                            val page = pages.getOrNull(safeIndex)
+                            activeNotebookId = docId
+                            activePageIndex = safeIndex
+                            openTabItems = openTabItems.map { item ->
+                                if (item.notebook.id == docId) {
+                                    item.copy(
+                                        pageNumber = safeIndex + 1,
+                                        pageId = page?.id ?: item.pageId
+                                    )
+                                } else item
+                            }.let {
+                                // Ensure the selected book is a tab.
+                                if (it.any { t -> t.notebook.id == docId }) it
+                                else {
+                                    val nb = notebooks.find { n -> n.id == docId }
+                                        ?: details?.notebook
+                                    if (nb != null) {
+                                        it + TabItemData(
+                                            notebook = nb,
+                                            pageNumber = safeIndex + 1,
+                                            pageId = page?.id
+                                        )
+                                    } else it
+                                }
+                            }
+                            persistTabsToServer(openTabItems)
+                            navigateTo(ActiveScreen.WORKSPACE)
                         }
 
                         TabsScreen(
-                            openNotebooks = orderedOpenNotebooks,
+                            openTabs = resolvedTabs,
+                            recentPages = resolvedRecent,
                             activeNotebookId = activeNotebookId ?: "",
-                            onSelectTab = { selectedId ->
-                                activeNotebookId = selectedId
-                                activePageIndex = 0
-                                navigateTo(ActiveScreen.WORKSPACE)
-                            },
+                            onSelectTab = { docId, pageIndex -> selectTab(docId, pageIndex) },
                             onCloseTab = { closedId ->
-                                val remaining = openTabIds - closedId
-                                openTabIds = remaining
+                                val remaining = openTabItems.filter { it.notebook.id != closedId }
+                                openTabItems = remaining
+                                persistTabsToServer(remaining)
                                 if (activeNotebookId == closedId) {
-                                    activeNotebookId = remaining.lastOrNull()
-                                    activePageIndex = 0
+                                    val next = remaining.lastOrNull()
+                                    activeNotebookId = next?.notebook?.id
+                                    activePageIndex = (next?.pageNumber ?: 1) - 1
                                     if (activeNotebookId == null) {
                                         navigateTo(ActiveScreen.BOOKSHELF)
                                     }
                                 }
                             },
                             onCloseAllTabs = {
-                                openTabIds = emptyList()
+                                openTabItems = emptyList()
                                 activeNotebookId = null
+                                persistTabsToServer(emptyList())
+                                navigateTo(ActiveScreen.BOOKSHELF)
+                            },
+                            onNewTabClick = {
+                                // Direct user to Bookshelf / shelf selection to pick another book
                                 navigateTo(ActiveScreen.BOOKSHELF)
                             },
                             onNavigateBack = { popScreen() }
@@ -622,8 +733,24 @@ class MainActivity : ComponentActivity() {
                                                 Toast.LENGTH_LONG
                                             ).show()
                                         }
-                                        if (!openTabIds.contains(imported.id)) {
-                                            openTabIds = openTabIds + imported.id
+                                        if (openTabItems.none { it.notebook.id == imported.id }) {
+                                            val importedNotebook = NotebookEntity(
+                                                id = imported.id,
+                                                title = imported.title,
+                                                description = imported.description,
+                                                ownerSub = currentUser?.uid ?: "*",
+                                                visibility = imported.visibility,
+                                                tagsCsv = imported.tagsCsv,
+                                                coverPreset = imported.coverPreset,
+                                                updatedAt = System.currentTimeMillis()
+                                            )
+                                            val updated = openTabItems + TabItemData(
+                                                notebook = importedNotebook,
+                                                pageNumber = 1,
+                                                pageId = imported.pages.firstOrNull()?.id
+                                            )
+                                            openTabItems = updated
+                                            persistTabsToServer(updated)
                                         }
                                         activeNotebookId = imported.id
                                         activePageIndex = 0
@@ -711,7 +838,12 @@ class MainActivity : ComponentActivity() {
                                             position = 0
                                         )
                                     )
-                                    openTabIds = openTabIds + newId
+                                    openTabItems = openTabItems + TabItemData(
+                                        notebook = book,
+                                        pageNumber = 1,
+                                        pageId = null
+                                    )
+                                    persistTabsToServer(openTabItems)
                                     activeNotebookId = newId
                                     activePageIndex = 0
                                     navigateTo(ActiveScreen.WORKSPACE)
@@ -754,7 +886,29 @@ class MainActivity : ComponentActivity() {
                                     activeNotebookId = null
                                     navigateTo(ActiveScreen.BOOKSHELF)
                                 },
-                                onSelectPage = { idx -> activePageIndex = idx },
+                                onSelectPage = { idx ->
+                                    activePageIndex = idx
+                                    val selectedPage = book.pages.getOrNull(idx)
+                                    openTabItems = openTabItems.map { item ->
+                                        if (item.notebook.id == book.notebook.id) {
+                                            item.copy(pageNumber = idx + 1, pageId = selectedPage?.id ?: item.pageId)
+                                        } else item
+                                    }
+                                    persistTabsToServer(openTabItems)
+                                    if (selectedPage != null) {
+                                        recentPageItems = (
+                                            listOf(
+                                                RecentPageItem(
+                                                    notebook = book.notebook,
+                                                    page = selectedPage,
+                                                    pageNumber = idx + 1
+                                                )
+                                            ) + recentPageItems.filterNot {
+                                                it.notebook.id == book.notebook.id && it.page.id == selectedPage.id
+                                            }
+                                            ).take(8)
+                                    }
+                                },
                                 onCreatePage = { title, parentId ->
                                     coroutineScope.launch {
                                         val newPageId = "p-${UUID.randomUUID().toString().take(8)}"
@@ -900,19 +1054,36 @@ class MainActivity : ComponentActivity() {
                             onSelectTagFilter = { selectedTagFilter = it },
                             onSignOut = { signOut() },
                             onOpenNotebook = { id ->
-                                if (!openTabIds.contains(id)) {
-                                    openTabIds = openTabIds + id
+                                val existing = openTabItems.find { it.notebook.id == id }
+                                if (existing == null) {
+                                    val nb = notebooks.find { it.id == id }
+                                    if (nb != null) {
+                                        val updated = openTabItems + TabItemData(
+                                            notebook = nb,
+                                            pageNumber = 1,
+                                            pageId = null
+                                        )
+                                        openTabItems = updated
+                                        persistTabsToServer(updated)
+                                    }
+                                    activeNotebookId = id
+                                    activePageIndex = 0
+                                } else {
+                                    activeNotebookId = id
+                                    activePageIndex = (existing.pageNumber - 1).coerceAtLeast(0)
                                 }
-                                activeNotebookId = id
-                                activePageIndex = 0
                                 navigateTo(ActiveScreen.WORKSPACE)
                             },
                             onDeleteNotebook = { id ->
                                 coroutineScope.launch {
                                     db.dao().deleteNotebookCascade(id)
-                                    openTabIds = openTabIds - id
+                                    val remaining = openTabItems.filter { it.notebook.id != id }
+                                    openTabItems = remaining
+                                    persistTabsToServer(remaining)
                                     if (activeNotebookId == id) {
-                                        activeNotebookId = openTabIds.firstOrNull()
+                                        val next = remaining.lastOrNull()
+                                        activeNotebookId = next?.notebook?.id
+                                        activePageIndex = (next?.pageNumber ?: 1) - 1
                                     }
                                     launch(Dispatchers.IO) {
                                         try { api.deleteNote(id) } catch (_: Exception) {}
