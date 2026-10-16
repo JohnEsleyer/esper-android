@@ -56,6 +56,7 @@ fun WorkspaceScreen(
     questions: List<QuestionEntity>,
     activePageIndex: Int,
     onOpenTabsScreen: () -> Unit,
+    onOpenConfigureBook: () -> Unit = {},
     onNavigateBack: () -> Unit,
     onSelectPage: (Int) -> Unit,
     onCreatePage: (title: String, parentId: String?) -> Unit,
@@ -174,6 +175,9 @@ fun WorkspaceScreen(
                         }
                         IconButton(onClick = onOpenTabsScreen) {
                             Icon(Icons.Default.Layers, contentDescription = "Tabs Screen", tint = ElectricViolet)
+                        }
+                        IconButton(onClick = onOpenConfigureBook) {
+                            Icon(Icons.Default.Tune, contentDescription = "Configure Book", tint = IndigoGlow)
                         }
                         if (hasAttachment) {
                             IconButton(onClick = {

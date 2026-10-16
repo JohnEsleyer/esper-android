@@ -24,6 +24,7 @@ import com.esper.android.data.remote.RemoteClient
 import com.esper.android.ui.auth.LoginScreen
 import com.esper.android.ui.bookshelf.AllTagsScreen
 import com.esper.android.ui.bookshelf.BookshelfScreen
+import com.esper.android.ui.bookshelf.ConfigureNotebookScreen
 import com.esper.android.ui.bookshelf.CreateNotebookScreen
 import com.esper.android.ui.bookshelf.SettingsScreen
 import com.esper.android.ui.journal.JournalScreen
@@ -55,6 +56,7 @@ enum class ActiveScreen {
     ALL_TAGS,
     SETTINGS,
     CREATE_NOTEBOOK,
+    CONFIGURE_NOTEBOOK,
     TABS,
     WORKSPACE,
     JOURNAL
@@ -85,6 +87,7 @@ class MainActivity : ComponentActivity() {
                 var activeNotebookId by remember { mutableStateOf<String?>(null) }
                 var activePageIndex by remember { mutableIntStateOf(0) }
                 var activeEditingQuestion by remember { mutableStateOf<QuestionEntity?>(null) }
+                var configuringNotebook by remember { mutableStateOf<NotebookEntity?>(null) }
                 var selectedTagFilter by remember { mutableStateOf("All") }
 
                 var openTabItems by remember {
@@ -858,6 +861,76 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
+                    currentScreen == ActiveScreen.CONFIGURE_NOTEBOOK && configuringNotebook != null -> {
+                        val targetBook = configuringNotebook!!
+                        key(targetBook.id) {
+                            ConfigureNotebookScreen(
+                                notebook = targetBook,
+                                onSaveConfig = { title, desc, tags, preset, coverImage, visibility, password ->
+                                    coroutineScope.launch {
+                                        val updated = targetBook.copy(
+                                            title = title,
+                                            description = desc,
+                                            tagsCsv = tags,
+                                            coverPreset = preset,
+                                            coverImage = coverImage,
+                                            visibility = visibility,
+                                            updatedAt = System.currentTimeMillis()
+                                        )
+                                        db.dao().upsertNotebook(updated)
+
+                                        // Keep open tabs and recents in sync with the new metadata.
+                                        openTabItems = openTabItems.map { item ->
+                                            if (item.notebook.id == updated.id) item.copy(notebook = updated)
+                                            else item
+                                        }
+                                        recentPageItems = recentPageItems.map { item ->
+                                            if (item.notebook.id == updated.id) item.copy(notebook = updated)
+                                            else item
+                                        }
+                                        if (configuringNotebook?.id == updated.id) {
+                                            configuringNotebook = updated
+                                        }
+
+                                        // Background sync to server with full payload.
+                                        launch(Dispatchers.IO) {
+                                            try {
+                                                val details = db.dao().getPagesForNotebook(updated.id)
+                                                val payload = mutableMapOf<String, Any?>(
+                                                    "title" to title,
+                                                    "description" to desc,
+                                                    "tags" to tags.split(",").map { it.trim() }.filter { it.isNotEmpty() },
+                                                    "coverPreset" to preset,
+                                                    "coverImage" to coverImage,
+                                                    "visibility" to visibility,
+                                                    "isPinned" to updated.isPinned,
+                                                    "pages" to details.map {
+                                                        mapOf(
+                                                            "id" to it.id,
+                                                            "parentId" to it.parentId,
+                                                            "title" to it.title,
+                                                            "notes" to it.notes
+                                                        )
+                                                    }
+                                                )
+                                                if (!password.isNullOrBlank()) {
+                                                    payload["password"] = password
+                                                }
+                                                api.updateNote(updated.id, payload)
+                                            } catch (e: Exception) {
+                                                Log.w("EsperConfig", "Failed to sync config to server", e)
+                                            }
+                                        }
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(applicationContext, "Book settings updated", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                onNavigateBack = { popScreen() }
+                            )
+                        }
+                    }
+
                     activeEditingQuestion != null -> {
                         QuestionEditorScreen(
                             question = activeEditingQuestion!!,
@@ -882,6 +955,10 @@ class MainActivity : ComponentActivity() {
                                 questions = book.questions,
                                 activePageIndex = activePageIndex,
                                 onOpenTabsScreen = { navigateTo(ActiveScreen.TABS) },
+                                onOpenConfigureBook = {
+                                    configuringNotebook = book.notebook
+                                    navigateTo(ActiveScreen.CONFIGURE_NOTEBOOK)
+                                },
                                 onNavigateBack = {
                                     activeNotebookId = null
                                     navigateTo(ActiveScreen.BOOKSHELF)
@@ -1073,6 +1150,10 @@ class MainActivity : ComponentActivity() {
                                     activePageIndex = (existing.pageNumber - 1).coerceAtLeast(0)
                                 }
                                 navigateTo(ActiveScreen.WORKSPACE)
+                            },
+                            onConfigureNotebook = { book ->
+                                configuringNotebook = book
+                                navigateTo(ActiveScreen.CONFIGURE_NOTEBOOK)
                             },
                             onDeleteNotebook = { id ->
                                 coroutineScope.launch {

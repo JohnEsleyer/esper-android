@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -27,9 +28,11 @@ import com.esper.android.ui.theme.*
 fun BookCard(
     notebook: NotebookEntity,
     onClick: () -> Unit,
+    onEdit: () -> Unit = {},
     onDelete: () -> Unit = {}
 ) {
-    val gradient = CoverThemeEngine.getTheme(notebook.coverPreset, notebook.coverImage).gradientColors
+    val theme = CoverThemeEngine.getTheme(notebook.coverPreset, notebook.coverImage)
+    val gradient = theme.gradientColors
 
     val hasCoverImage = !notebook.coverImage.isNullOrBlank()
 
@@ -58,6 +61,15 @@ fun BookCard(
                         modifier = Modifier.fillMaxSize()
                     )
                 }
+
+                // App-rendered book spine (subtle translucent, artwork stays full-bleed)
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(8.dp)
+                        .background(theme.spineColor.copy(alpha = 0.55f))
+                        .align(Alignment.CenterStart)
+                )
 
 
                 // Top action icons
@@ -88,20 +100,39 @@ fun BookCard(
                         Spacer(modifier = Modifier.size(18.dp))
                     }
 
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = Color.Black.copy(alpha = 0.5f)
-                    ) {
-                        IconButton(
-                            onClick = onDelete,
-                            modifier = Modifier.size(28.dp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color.Black.copy(alpha = 0.5f)
                         ) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "Delete",
-                                tint = Color.White.copy(alpha = 0.85f),
-                                modifier = Modifier.size(15.dp)
-                            )
+                            IconButton(
+                                onClick = onEdit,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Tune,
+                                    contentDescription = "Configure Book",
+                                    tint = Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color.Black.copy(alpha = 0.5f)
+                        ) {
+                            IconButton(
+                                onClick = onDelete,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = "Delete",
+                                    tint = Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
                         }
                     }
                 }

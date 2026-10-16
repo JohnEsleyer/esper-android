@@ -1,0 +1,382 @@
+package com.esper.android.ui.bookshelf
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import com.esper.android.data.model.NotebookEntity
+import com.esper.android.ui.theme.*
+
+const val LLM_COVER_PROMPT_TEMPLATE = """You are an award-winning book cover designer and master SVG vector artist.
+Design a high-contrast book cover as a standalone valid SVG file for the reading workspace "Esper".
+
+### BOOK DETAILS:
+- Title: "[REPLACE: Book Title]"
+- Subtitle: "[REPLACE: Subtitle]"
+- Category: "[REPLACE: Category]"
+- Volume: "VOL. 01"
+- Author: "[REPLACE: Author Name]"
+
+### TECHNICAL SPECS:
+1. Dimensions: viewBox="0 0 1000 1440" (1:1.44 ratio, standard modern paperback).
+2. Palette: Deep dark background (#020617 or #090d16) with luminous vector accents (#818cf8, #34d399, #fbbf24, #60a5fa, #fb7185).
+3. Layers: Background gradient, subtle coordinate/grid texture, central topic-specific abstract vector artwork, 3D left-spine shadow (x=0 to 36), and clear typography.
+4. Output: ONLY pure valid <svg>...</svg> code without markdown backticks.
+
+Begin."""
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ConfigureNotebookScreen(
+    notebook: NotebookEntity,
+    onSaveConfig: (
+        title: String,
+        description: String,
+        tags: String,
+        coverPreset: String,
+        coverImage: String?,
+        visibility: String,
+        password: String?
+    ) -> Unit,
+    onNavigateBack: () -> Unit
+) {
+    BackHandler { onNavigateBack() }
+
+    val context = LocalContext.current
+
+    var title by remember { mutableStateOf(notebook.title) }
+    var description by remember { mutableStateOf(notebook.description) }
+    var tags by remember { mutableStateOf(notebook.tagsCsv) }
+    var coverPreset by remember { mutableStateOf(notebook.coverPreset) }
+    var coverImageInput by remember { mutableStateOf(notebook.coverImage ?: "") }
+    var visibility by remember { mutableStateOf(notebook.visibility) }
+    var passwordInput by remember { mutableStateOf("") }
+    var isCopiedPrompt by remember { mutableStateOf(false) }
+
+    fun sanitizeCover(input: String): String? {
+        val trimmed = input.trim()
+        if (trimmed.isEmpty()) return null
+        if (trimmed.startsWith("<svg", ignoreCase = true) && trimmed.endsWith("</svg>", ignoreCase = true)) {
+            return "data:image/svg+xml;utf8," + Uri.encode(trimmed)
+        }
+        return trimmed
+    }
+
+    val sanitizedCover = remember(coverImageInput) { sanitizeCover(coverImageInput) }
+
+    val coverTheme = CoverThemeEngine.getTheme(coverPreset, sanitizedCover)
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("Configure Book", fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 16.sp)
+                        Text(notebook.title, color = IndigoGlow, fontSize = 11.sp, maxLines = 1)
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            if (title.isNotBlank()) {
+                                onSaveConfig(
+                                    title.trim(),
+                                    description.trim(),
+                                    tags.trim(),
+                                    coverPreset,
+                                    sanitizedCover,
+                                    visibility,
+                                    passwordInput.trim().ifEmpty { null }
+                                )
+                                onNavigateBack()
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.Check, contentDescription = "Save Changes", tint = EmeraldSync)
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .background(SpaceBlack)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Live 3D Cover Preview
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, coverTheme.accentColor.copy(alpha = 0.5f)),
+                    shadowElevation = 10.dp,
+                    modifier = Modifier
+                        .width(160.dp)
+                        .aspectRatio(0.69f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Brush.verticalGradient(coverTheme.gradientColors))
+                    ) {
+                        if (!sanitizedCover.isNullOrBlank()) {
+                            AsyncImage(
+                                model = sanitizedCover,
+                                contentDescription = title,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.SpaceBetween,
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = Color.Black.copy(alpha = 0.6f)
+                                ) {
+                                    Text(
+                                        text = tags.split(",").firstOrNull()?.trim()?.ifBlank { "GENERAL" } ?: "GENERAL",
+                                        color = coverTheme.accentColor,
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+
+                                Text(
+                                    text = title.ifBlank { "Book Title" },
+                                    color = Color.White,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 13.sp,
+                                    lineHeight = 16.sp,
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
+
+                                Text(
+                                    text = "ESPER NOTEBOOK",
+                                    color = Color.White.copy(alpha = 0.5f),
+                                    fontSize = 8.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+
+                        // Spine shadow overlay
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .width(8.dp)
+                                .background(
+                                    Brush.horizontalGradient(
+                                        listOf(Color.Black.copy(alpha = 0.45f), Color.Transparent)
+                                    )
+                                )
+                                .align(Alignment.CenterStart)
+                        )
+                    }
+                }
+            }
+
+            // Title & Description
+            OutlinedTextField(
+                value = title,
+                onValueChange = { title = it },
+                label = { Text("Book Title *") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = description,
+                onValueChange = { description = it },
+                label = { Text("Description") },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = tags,
+                onValueChange = { tags = it },
+                label = { Text("Categories / Tags (comma-separated)") },
+                placeholder = { Text("Physics, Astrodynamics, Drafts") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // Access Control
+            Text("Access Control & Sharing", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = visibility == "public",
+                    onClick = { visibility = "public" },
+                    label = { Text("Public") },
+                    leadingIcon = { Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                )
+                FilterChip(
+                    selected = visibility == "protected",
+                    onClick = { visibility = "protected" },
+                    label = { Text("Protected") },
+                    leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                )
+                FilterChip(
+                    selected = visibility == "restricted",
+                    onClick = { visibility = "restricted" },
+                    label = { Text("Restricted") }
+                )
+            }
+
+            if (visibility == "protected") {
+                OutlinedTextField(
+                    value = passwordInput,
+                    onValueChange = { passwordInput = it },
+                    label = { Text("Set Visitor Password (leave blank to keep current)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // Cover Presets Carousel (all 24 built-in themes)
+            PresetCoverCarousel(
+                selectedPresetId = coverPreset,
+                onPresetSelected = { presetId ->
+                    coverPreset = presetId
+                    coverImageInput = ""
+                }
+            )
+
+            // Custom Cover URL or Raw SVG with AI Prompt Copy button
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = CosmicSlate,
+                border = BorderStroke(1.dp, BorderSlate)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Custom Image or SVG Code", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+
+                        Button(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = ClipData.newPlainText("Esper Cover Prompt", LLM_COVER_PROMPT_TEMPLATE)
+                                clipboard.setPrimaryClip(clip)
+                                isCopiedPrompt = true
+                                Toast.makeText(context, "AI Cover Prompt copied to clipboard!", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = IndigoAccent.copy(alpha = 0.25f)),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Icon(
+                                if (isCopiedPrompt) Icons.Default.Check else Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = if (isCopiedPrompt) EmeraldSync else IndigoGlow,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (isCopiedPrompt) "Copied!" else "AI Prompt",
+                                color = if (isCopiedPrompt) EmeraldSync else IndigoGlow,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = coverImageInput,
+                        onValueChange = { coverImageInput = it },
+                        label = { Text("Image URL or raw <svg>...</svg>") },
+                        placeholder = { Text("https://... or <svg viewBox=\"0 0 1000 1440\"...") },
+                        maxLines = 4,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (coverImageInput.isNotBlank()) {
+                        TextButton(
+                            onClick = { coverImageInput = "" },
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Text("Clear Custom Cover", color = RoseRuby, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Save button
+            Button(
+                onClick = {
+                    if (title.isNotBlank()) {
+                        onSaveConfig(
+                            title.trim(),
+                            description.trim(),
+                            tags.trim(),
+                            coverPreset,
+                            sanitizedCover,
+                            visibility,
+                            passwordInput.trim().ifEmpty { null }
+                        )
+                        onNavigateBack()
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = IndigoAccent),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+            ) {
+                Text("Save Configuration", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
+        }
+    }
+}

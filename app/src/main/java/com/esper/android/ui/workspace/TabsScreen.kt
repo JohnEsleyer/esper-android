@@ -160,12 +160,12 @@ fun TabsScreen(
                                     .fillMaxWidth()
                                     .background(Brush.horizontalGradient(listOf(theme.gradientColors.first().copy(alpha = 0.4f), Color(0xFF0F172A))))
                             ) {
-                                // Book Spine matching the cover
+                                // Book Spine matching the cover (subtle translucent)
                                 Box(
                                     modifier = Modifier
                                         .fillMaxHeight()
                                         .width(5.dp)
-                                        .background(theme.spineColor)
+                                        .background(theme.spineColor.copy(alpha = 0.55f))
                                         .align(Alignment.CenterStart)
                                 )
 
@@ -302,12 +302,12 @@ fun TabsScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Mini Left spine matching the parent book's cover
+                                // Mini Left spine matching the parent book's cover (subtle translucent)
                                 Box(
                                     modifier = Modifier
                                         .width(4.dp)
                                         .height(44.dp)
-                                        .background(theme.spineColor)
+                                        .background(theme.spineColor.copy(alpha = 0.55f))
                                 )
 
                                 Row(

@@ -57,6 +57,7 @@ fun BookshelfScreen(
     onSelectTagFilter: (String) -> Unit,
     onSignOut: () -> Unit,
     onOpenNotebook: (String) -> Unit,
+    onConfigureNotebook: (NotebookEntity) -> Unit = {},
     onDeleteNotebook: (String) -> Unit,
     onOpenAllTagsScreen: () -> Unit,
     onOpenTabsScreen: () -> Unit,
@@ -500,6 +501,7 @@ fun BookshelfScreen(
                                 BookCard(
                                     notebook = book,
                                     onClick = { onOpenNotebook(book.id) },
+                                    onEdit = { onConfigureNotebook(book) },
                                     onDelete = { onDeleteNotebook(book.id) }
                                 )
                             }
