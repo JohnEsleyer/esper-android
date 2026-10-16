@@ -30,6 +30,9 @@ interface EsperDao {
     @Query("SELECT * FROM notebooks WHERE id = :notebookId")
     suspend fun getNotebookById(notebookId: String): NotebookEntity?
 
+    @Query("SELECT * FROM notebooks")
+    suspend fun getAllNotebooksList(): List<NotebookEntity>
+
     @Query("SELECT * FROM pages WHERE notebookId = :notebookId ORDER BY position ASC")
     suspend fun getPagesForNotebook(notebookId: String): List<PageEntity>
 
@@ -63,6 +66,9 @@ interface EsperDao {
     @Query("DELETE FROM questions WHERE id = :questionId")
     suspend fun deleteQuestion(questionId: String)
 
+    @Query("DELETE FROM questions WHERE notebookId = :notebookId")
+    suspend fun deleteQuestionsForNotebook(notebookId: String)
+
     @Query("UPDATE pages SET notes = :notes WHERE id = :pageId")
     suspend fun updatePageNotes(pageId: String, notes: String)
 
@@ -78,15 +84,32 @@ interface EsperDao {
     @Query("DELETE FROM pages WHERE id = :pageId OR parentId = :pageId")
     suspend fun deletePageAndChildren(pageId: String)
 
+    @Query("DELETE FROM pages WHERE notebookId = :notebookId")
+    suspend fun deletePagesForNotebook(notebookId: String)
+
     @Query("DELETE FROM canvases WHERE id = :canvasId")
     suspend fun deleteCanvas(canvasId: String)
+
+    @Query("DELETE FROM canvases WHERE notebookId = :notebookId")
+    suspend fun deleteCanvasesForNotebook(notebookId: String)
 
     @Query("DELETE FROM notebooks WHERE id = :notebookId")
     suspend fun deleteNotebook(notebookId: String)
 
+    @Transaction
+    suspend fun deleteNotebookCascade(notebookId: String) {
+        deletePagesForNotebook(notebookId)
+        deleteCanvasesForNotebook(notebookId)
+        deleteQuestionsForNotebook(notebookId)
+        deleteNotebook(notebookId)
+    }
+
     // Shelf CRUD
     @Query("SELECT * FROM shelves ORDER BY position ASC, updatedAt DESC")
     fun observeAllShelves(): Flow<List<ShelfEntity>>
+
+    @Query("SELECT * FROM shelves")
+    suspend fun getAllShelvesList(): List<ShelfEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertShelf(shelf: ShelfEntity)

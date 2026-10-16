@@ -214,30 +214,37 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(Unit) {
                     coroutineScope.launch {
-                        val existing = db.dao().getNotebookById("kepler-001")
-                        if (existing == null) {
-                            db.dao().upsertNotebook(
-                                NotebookEntity(
-                                    id = "kepler-001",
-                                    title = "Kepler's Laws of Planetary Motion",
-                                    description = "Astrodynamics notebook with interactive elliptical simulations.",
-                                    ownerSub = "*",
-                                    visibility = "public",
-                                    tagsCsv = "Astrodynamics,Physics",
-                                    updatedAt = System.currentTimeMillis()
-                                )
-                            )
-                            db.dao().upsertPages(
-                                listOf(
-                                    PageEntity(
-                                        id = "p1",
-                                        notebookId = "kepler-001",
-                                        title = "Introduction to Celestial Dynamics",
-                                        notes = "# Introduction to Celestial Dynamics\n\nWelcome to **Esper** on Android!\n",
-                                        position = 0
+                        val prefs = getSharedPreferences("esper_prefs", Context.MODE_PRIVATE)
+                        val hasSeeded = prefs.getBoolean("has_seeded_kepler_v1", false)
+
+                        // Only seed once for first-time offline guest launch; never overwrite user cloud data
+                        if (!hasSeeded && currentUser == null) {
+                            val existing = db.dao().getNotebookById("kepler-001")
+                            if (existing == null) {
+                                db.dao().upsertNotebook(
+                                    NotebookEntity(
+                                        id = "kepler-001",
+                                        title = "Kepler's Laws of Planetary Motion",
+                                        description = "Astrodynamics notebook with interactive elliptical simulations.",
+                                        ownerSub = "*",
+                                        visibility = "public",
+                                        tagsCsv = "Astrodynamics,Physics",
+                                        updatedAt = System.currentTimeMillis()
                                     )
                                 )
-                            )
+                                db.dao().upsertPages(
+                                    listOf(
+                                        PageEntity(
+                                            id = "p1",
+                                            notebookId = "kepler-001",
+                                            title = "Introduction to Celestial Dynamics",
+                                            notes = "# Introduction to Celestial Dynamics\n\nWelcome to **Esper** on Android!\n",
+                                            position = 0
+                                        )
+                                    )
+                                )
+                            }
+                            prefs.edit().putBoolean("has_seeded_kepler_v1", true).apply()
                         }
                         // Single-book journal seed (deterministic id shared with web).
                         val existingJournal = db.dao().getNotebookById("esper-journal")
@@ -272,14 +279,29 @@ class MainActivity : ComponentActivity() {
                 fun syncWithCloud() {
                     coroutineScope.launch(Dispatchers.IO) {
                         try {
-                            // Zero-knowledge parity with web decryptNotebook:
-                            // restricted/protected books arrive as enc:v1:...
-                            // and must be unwrapped before hitting Room,
-                            // otherwise the UI renders raw ciphertext.
                             val cryptoKey = currentUser?.uid?.let { uid ->
                                 try { CryptoEngine.deriveKey(uid) } catch (_: Exception) { null }
                             }
                             val remoteNotes = api.getUserNotes()
+                            val remoteIds = remoteNotes.map { it.id }.toSet()
+
+                            // Step A: Purge local notebooks that were deleted on web
+                            val localNotebooks = db.dao().getAllNotebooksList()
+                            localNotebooks.forEach { local ->
+                                if (local.id != "esper-journal" && !remoteIds.contains(local.id)) {
+                                    db.dao().deleteNotebookCascade(local.id)
+                                }
+                            }
+
+                            // Step B: Reconcile open tabs
+                            withContext(Dispatchers.Main) {
+                                openTabIds = openTabIds.filter { remoteIds.contains(it) || it == "esper-journal" }
+                                if (activeNotebookId != null && !remoteIds.contains(activeNotebookId) && activeNotebookId != "esper-journal") {
+                                    activeNotebookId = openTabIds.firstOrNull()
+                                }
+                            }
+
+                            // Step C: Upsert remote notebooks and preserve whiteboard JSON
                             remoteNotes.forEach { r ->
                                 db.dao().upsertNotebook(
                                     NotebookEntity(
@@ -308,10 +330,29 @@ class MainActivity : ComponentActivity() {
                                 }?.let { db.dao().upsertPages(it) }
 
                                 r.canvases?.map { c ->
-                                    val payload = when (val d = c.data) {
-                                        is Map<*, *> -> (d["code"] ?: d["url"] ?: "").toString()
-                                        is String -> d
-                                        else -> Gson().toJson(d)
+                                    // Fix: Preserve whiteboard elements without truncating to ""
+                                    val payload = when (c.type.lowercase()) {
+                                        "html" -> {
+                                            when (val d = c.data) {
+                                                is String -> d
+                                                is Map<*, *> -> d["code"]?.toString() ?: Gson().toJson(d)
+                                                else -> Gson().toJson(d)
+                                            }
+                                        }
+                                        "youtube" -> {
+                                            when (val d = c.data) {
+                                                is String -> d
+                                                is Map<*, *> -> d["url"]?.toString() ?: Gson().toJson(d)
+                                                else -> Gson().toJson(d)
+                                            }
+                                        }
+                                        else -> {
+                                            // "excalidraw", "draw", "canvas"
+                                            when (val d = c.data) {
+                                                is String -> d
+                                                else -> Gson().toJson(d)
+                                            }
+                                        }
                                     }
                                     CanvasEntity(
                                         id = c.id,
@@ -333,6 +374,32 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }?.let { db.dao().upsertQuestions(it) }
                             }
+
+                            // Step D: Reconcile shelves
+                            try {
+                                val remoteShelves = api.getShelves()
+                                val remoteShelfIds = remoteShelves.map { it.id }.toSet()
+                                val localShelves = db.dao().getAllShelvesList()
+                                localShelves.forEach { s ->
+                                    if (!remoteShelfIds.contains(s.id)) {
+                                        db.dao().deleteShelf(s.id)
+                                    }
+                                }
+                                remoteShelves.forEach { s ->
+                                    db.dao().upsertShelf(
+                                        ShelfEntity(
+                                            id = s.id,
+                                            title = s.title,
+                                            description = s.description ?: "",
+                                            color = s.color ?: "#6366F1",
+                                            coverPreset = s.coverPreset ?: "midnight",
+                                            position = s.position ?: 0,
+                                            notebookIdsCsv = s.notebookIds?.joinToString(",") ?: "",
+                                            updatedAt = System.currentTimeMillis()
+                                        )
+                                    )
+                                }
+                            } catch (_: Exception) {}
                             withContext(Dispatchers.Main) {
                                 Toast.makeText(applicationContext, "Synced ${remoteNotes.size} notebooks", Toast.LENGTH_SHORT).show()
                             }
@@ -842,8 +909,11 @@ class MainActivity : ComponentActivity() {
                             },
                             onDeleteNotebook = { id ->
                                 coroutineScope.launch {
-                                    db.dao().deleteNotebook(id)
+                                    db.dao().deleteNotebookCascade(id)
                                     openTabIds = openTabIds - id
+                                    if (activeNotebookId == id) {
+                                        activeNotebookId = openTabIds.firstOrNull()
+                                    }
                                     launch(Dispatchers.IO) {
                                         try { api.deleteNote(id) } catch (_: Exception) {}
                                     }

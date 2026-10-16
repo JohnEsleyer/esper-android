@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -39,32 +40,29 @@ import com.esper.android.ui.theme.IndigoGlow
 import com.esper.android.ui.theme.SpaceBlack
 import com.google.gson.Gson
 import com.google.gson.JsonArray
-import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 
-/**
- * Android Read-Only Whiteboard:
- * Rasterizes Excalidraw/vector elements into an offscreen high-DPI Bitmap once.
- * Touch gestures pan and zoom the pre-rendered image smoothly at 60/120fps.
- */
 @Composable
 fun DrawingCanvasView(
     rawJson: String,
     modifier: Modifier = Modifier
 ) {
     var renderedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var elementCount by remember { mutableIntStateOf(0) }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
 
     LaunchedEffect(rawJson) {
-        val bmp = withContext(Dispatchers.Default) {
+        val (bmp, count) = withContext(Dispatchers.Default) {
             WhiteboardBitmapRenderer.render(rawJson)
         }
         renderedBitmap = bmp
+        elementCount = count
         scale = 1f
         offset = Offset.Zero
     }
@@ -83,7 +81,7 @@ fun DrawingCanvasView(
             }
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan, zoom, _ ->
-                    scale = (scale * zoom).coerceIn(0.3f, 5.0f)
+                    scale = (scale * zoom).coerceIn(0.25f, 6.0f)
                     offset += pan
                 }
             }
@@ -93,6 +91,7 @@ fun DrawingCanvasView(
             Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = "Whiteboard Canvas",
+                contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {
@@ -104,7 +103,7 @@ fun DrawingCanvasView(
             )
         }
 
-        // Top Status Badge: Read-Only Whiteboard
+        // Top Status Badge
         Surface(
             shape = RoundedCornerShape(10.dp),
             color = CosmicSlate.copy(alpha = 0.85f),
@@ -125,7 +124,7 @@ fun DrawingCanvasView(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Whiteboard · Read Only · ${(scale * 100).toInt()}%",
+                    text = if (elementCount > 0) "Whiteboard · $elementCount elements · ${(scale * 100).toInt()}%" else "Whiteboard · Empty",
                     color = IndigoGlow,
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
@@ -148,7 +147,7 @@ fun DrawingCanvasView(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
-                    onClick = { scale = (scale + 0.25f).coerceAtMost(5.0f) },
+                    onClick = { scale = (scale + 0.25f).coerceAtMost(6.0f) },
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(Icons.Default.Add, contentDescription = "Zoom In", tint = IndigoGlow, modifier = Modifier.size(16.dp))
@@ -163,7 +162,7 @@ fun DrawingCanvasView(
                     Icon(Icons.Default.CenterFocusStrong, contentDescription = "Reset View", tint = Color.White, modifier = Modifier.size(16.dp))
                 }
                 IconButton(
-                    onClick = { scale = (scale - 0.25f).coerceAtLeast(0.3f) },
+                    onClick = { scale = (scale - 0.25f).coerceAtLeast(0.25f) },
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(Icons.Default.Remove, contentDescription = "Zoom Out", tint = IndigoGlow, modifier = Modifier.size(16.dp))
@@ -174,11 +173,11 @@ fun DrawingCanvasView(
 }
 
 private object WhiteboardBitmapRenderer {
-    private const val DEFAULT_WIDTH = 2048
-    private const val DEFAULT_HEIGHT = 1440
-    private const val PADDING = 100f
+    private const val MIN_WIDTH = 1920
+    private const val MIN_HEIGHT = 1200
+    private const val PADDING = 140f
 
-    fun render(rawJson: String): Bitmap {
+    fun render(rawJson: String): Pair<Bitmap, Int> {
         val elements = parseElements(rawJson)
 
         var minX = Float.MAX_VALUE
@@ -193,11 +192,12 @@ private object WhiteboardBitmapRenderer {
             maxY = maxOf(maxY, el.bounds.bottom)
         }
 
-        val contentWidth = if (maxX > minX) (maxX - minX + PADDING * 2).toInt() else DEFAULT_WIDTH
-        val contentHeight = if (maxY > minY) (maxY - minY + PADDING * 2).toInt() else DEFAULT_HEIGHT
+        val hasBounds = minX < Float.MAX_VALUE && maxX > Float.MIN_VALUE
+        val spanW = if (hasBounds) (maxX - minX).coerceAtLeast(200f) else 800f
+        val spanH = if (hasBounds) (maxY - minY).coerceAtLeast(200f) else 600f
 
-        val bmpWidth = contentWidth.coerceIn(1200, 3200)
-        val bmpHeight = contentHeight.coerceIn(800, 2400)
+        val bmpWidth = maxOf(MIN_WIDTH, (spanW + PADDING * 2).toInt()).coerceAtMost(3840)
+        val bmpHeight = maxOf(MIN_HEIGHT, (spanH + PADDING * 2).toInt()).coerceAtMost(2560)
 
         val bitmap = Bitmap.createBitmap(bmpWidth, bmpHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -208,10 +208,10 @@ private object WhiteboardBitmapRenderer {
         // 2. Blueprint Dot Grid
         val gridPaint = Paint().apply {
             color = android.graphics.Color.parseColor("#1E293B")
-            alpha = 110
+            alpha = 120
             isAntiAlias = true
         }
-        val step = 40f
+        val step = 36f
         var gx = 0f
         while (gx < bmpWidth) {
             var gy = 0f
@@ -222,36 +222,63 @@ private object WhiteboardBitmapRenderer {
             gx += step
         }
 
-        // Center elements if bounding box is smaller than canvas
-        val shiftX = if (minX < Float.MAX_VALUE) PADDING - minX else 0f
-        val shiftY = if (minY < Float.MAX_VALUE) PADDING - minY else 0f
-        canvas.translate(shiftX, shiftY)
+        // Center all drawings inside the bitmap
+        if (hasBounds) {
+            val contentCenterX = (minX + maxX) / 2f
+            val contentCenterY = (minY + maxY) / 2f
+            val shiftX = (bmpWidth / 2f) - contentCenterX
+            val shiftY = (bmpHeight / 2f) - contentCenterY
+            canvas.translate(shiftX, shiftY)
+        }
 
         // 3. Render Whiteboard Shapes & Paths
         elements.forEach { it.draw(canvas) }
 
-        return bitmap
+        return Pair(bitmap, elements.size)
     }
 
     private fun parseElements(raw: String): List<RenderableElement> {
-        if (raw.isBlank()) return emptyList()
+        var text = raw.trim()
+        if (text.isEmpty() || text == "{}") return emptyList()
+
+        // Unescape if double-encoded JSON string
+        if (text.startsWith("\"") && text.endsWith("\"") && text.length > 2) {
+            try {
+                text = Gson().fromJson(text, String::class.java) ?: text
+            } catch (_: Exception) {}
+        }
+
         val list = mutableListOf<RenderableElement>()
 
         try {
-            val root = Gson().fromJson(raw, JsonObject::class.java)
+            val jsonElement = JsonParser.parseString(text)
             val arr: JsonArray? = when {
-                root.has("elements") && root.get("elements").isJsonArray -> root.getAsJsonArray("elements")
-                root.has("shapes") && root.get("shapes").isJsonArray -> root.getAsJsonArray("shapes")
+                jsonElement.isJsonArray -> jsonElement.asJsonArray
+                jsonElement.isJsonObject -> {
+                    val obj = jsonElement.asJsonObject
+                    when {
+                        obj.has("elements") && obj.get("elements").isJsonArray -> obj.getAsJsonArray("elements")
+                        obj.has("shapes") && obj.get("shapes").isJsonArray -> obj.getAsJsonArray("shapes")
+                        obj.has("data") && obj.get("data").isJsonObject -> {
+                            val d = obj.getAsJsonObject("data")
+                            if (d.has("elements") && d.get("elements").isJsonArray) d.getAsJsonArray("elements") else null
+                        }
+                        else -> null
+                    }
+                }
                 else -> null
             }
 
             arr?.forEach { elem ->
                 if (!elem.isJsonObject) return@forEach
                 val o = elem.asJsonObject
-                val kind = (o.get("type")?.asString ?: o.get("tool")?.asString ?: "path").lowercase()
-                val hex = o.get("strokeColor")?.asString ?: o.get("color")?.asString ?: "#818CF8"
+                val kind = (o.get("type")?.takeIf { it.isJsonPrimitive }?.asString
+                    ?: o.get("tool")?.takeIf { it.isJsonPrimitive }?.asString ?: "path").lowercase()
+                val hex = o.get("strokeColor")?.takeIf { it.isJsonPrimitive }?.asString
+                    ?: o.get("color")?.takeIf { it.isJsonPrimitive }?.asString ?: "#818CF8"
                 val strokeColor = parseColor(hex)
-                val strokeW = o.get("strokeWidth")?.asFloat ?: o.get("width")?.asFloat ?: 3.5f
+                val strokeW = (o.get("strokeWidth")?.takeIf { it.isJsonPrimitive }?.asFloat
+                    ?: o.get("width")?.takeIf { it.isJsonPrimitive }?.asFloat ?: 3.5f).coerceAtLeast(3f)
 
                 when (kind) {
                     "rect", "rectangle" -> {
@@ -271,32 +298,51 @@ private object WhiteboardBitmapRenderer {
                     "arrow", "line" -> {
                         val x = o.get("x")?.asFloat ?: 0f
                         val y = o.get("y")?.asFloat ?: 0f
-                        val w = o.get("w")?.asFloat ?: o.get("width")?.asFloat ?: 120f
-                        val h = o.get("h")?.asFloat ?: o.get("height")?.asFloat ?: 60f
-                        list.add(ArrowElement(x, y, x + w, y + h, strokeColor, strokeW))
+                        val ptsArr = o.get("points")?.takeIf { it.isJsonArray }?.asJsonArray
+                        if (ptsArr != null && ptsArr.size() >= 2) {
+                            val pStart = ptsArr.first().asJsonArray
+                            val pEnd = ptsArr.last().asJsonArray
+                            val x1 = x + pStart[0].asFloat
+                            val y1 = y + pStart[1].asFloat
+                            val x2 = x + pEnd[0].asFloat
+                            val y2 = y + pEnd[1].asFloat
+                            list.add(ArrowElement(x1, y1, x2, y2, strokeColor, strokeW))
+                        } else {
+                            val w = o.get("w")?.asFloat ?: o.get("width")?.asFloat ?: 120f
+                            val h = o.get("h")?.asFloat ?: o.get("height")?.asFloat ?: 60f
+                            list.add(ArrowElement(x, y, x + w, y + h, strokeColor, strokeW))
+                        }
                     }
                     "pencil", "freedraw", "freehand", "path" -> {
                         val pts = mutableListOf<Pair<Float, Float>>()
-                        val bx = o.get("x")?.asFloat ?: 0f
-                        val by = o.get("y")?.asFloat ?: 0f
+                        val bx = o.get("x")?.takeIf { it.isJsonPrimitive }?.asFloat ?: 0f
+                        val by = o.get("y")?.takeIf { it.isJsonPrimitive }?.asFloat ?: 0f
+                        val isExcalidrawRelative = o.has("type") && (bx != 0f || by != 0f)
+
                         val ptsArr = o.get("points")?.takeIf { it.isJsonArray }?.asJsonArray
                         ptsArr?.forEach { p ->
                             if (p.isJsonArray) {
                                 val pair = p.asJsonArray
-                                if (pair.size() >= 2) pts.add(Pair(bx + pair[0].asFloat, by + pair[1].asFloat))
+                                if (pair.size() >= 2) {
+                                    val px = pair[0].asFloat
+                                    val py = pair[1].asFloat
+                                    pts.add(Pair(if (isExcalidrawRelative) bx + px else px, if (isExcalidrawRelative) by + py else py))
+                                }
                             } else if (p.isJsonObject) {
                                 val po = p.asJsonObject
-                                pts.add(Pair(bx + (po.get("x")?.asFloat ?: 0f), by + (po.get("y")?.asFloat ?: 0f)))
+                                val px = po.get("x")?.asFloat ?: 0f
+                                val py = po.get("y")?.asFloat ?: 0f
+                                pts.add(Pair(px, py))
                             }
                         }
                         if (pts.isNotEmpty()) list.add(PathElement(pts, strokeColor, strokeW))
                     }
                     "text" -> {
-                        val text = o.get("text")?.asString ?: "Text"
+                        val textStr = o.get("text")?.takeIf { it.isJsonPrimitive }?.asString ?: "Text"
                         val x = o.get("x")?.asFloat ?: 0f
                         val y = o.get("y")?.asFloat ?: 0f
-                        val size = o.get("fontSize")?.asFloat ?: 18f
-                        list.add(TextElement(text, x, y, strokeColor, size))
+                        val size = o.get("fontSize")?.asFloat ?: 20f
+                        list.add(TextElement(textStr, x, y, strokeColor, size))
                     }
                 }
             }
@@ -307,8 +353,16 @@ private object WhiteboardBitmapRenderer {
 
     private fun parseColor(hex: String): Int {
         return try {
-            val clean = hex.removePrefix("#")
-            android.graphics.Color.parseColor("#$clean")
+            val clean = hex.removePrefix("#").trim()
+            when (clean.length) {
+                3 -> {
+                    val r = clean[0]; val g = clean[1]; val b = clean[2]
+                    android.graphics.Color.parseColor("#FF$r$r$g$g$b$b")
+                }
+                6 -> android.graphics.Color.parseColor("#FF$clean")
+                8 -> android.graphics.Color.parseColor("#$clean")
+                else -> android.graphics.Color.parseColor("#818CF8")
+            }
         } catch (_: Exception) {
             android.graphics.Color.parseColor("#818CF8")
         }
@@ -355,7 +409,7 @@ private object WhiteboardBitmapRenderer {
         val x1: Float, val y1: Float, val x2: Float, val y2: Float,
         val color: Int, val strokeWidth: Float
     ) : RenderableElement {
-        override val bounds = RectF(minOf(x1, x2) - 20f, minOf(y1, y2) - 20f, maxOf(x1, x2) + 20f, maxOf(y1, y2) + 20f)
+        override val bounds = RectF(minOf(x1, x2) - 24f, minOf(y1, y2) - 24f, maxOf(x1, x2) + 24f, maxOf(y1, y2) + 24f)
         override fun draw(canvas: Canvas) {
             val paint = Paint().apply {
                 color = this@ArrowElement.color
@@ -366,7 +420,6 @@ private object WhiteboardBitmapRenderer {
             }
             canvas.drawLine(x1, y1, x2, y2, paint)
 
-            // Sharp arrow tip
             val angle = atan2((y2 - y1).toDouble(), (x2 - x1).toDouble())
             val headLen = 22f
             val path = android.graphics.Path()
@@ -420,7 +473,7 @@ private object WhiteboardBitmapRenderer {
         val text: String, val x: Float, val y: Float,
         val color: Int, val fontSize: Float
     ) : RenderableElement {
-        override val bounds = RectF(x, y - fontSize, x + text.length * fontSize * 0.6f, y + 10f)
+        override val bounds = RectF(x, y - fontSize, x + text.length * fontSize * 0.65f, y + 10f)
         override fun draw(canvas: Canvas) {
             val paint = Paint().apply {
                 color = this@TextElement.color

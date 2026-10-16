@@ -138,9 +138,9 @@ fun AttachmentsBottomSheet(
                             label = { Text("YouTube Video") }
                         )
                         FilterChip(
-                            selected = kind == "draw",
+                            selected = kind == "excalidraw",
                             onClick = {
-                                kind = "draw"
+                                kind = "excalidraw"
                                 if (payload.isBlank()) payload = "{\"elements\":[]}"
                             },
                             label = { Text("Drawing") }
@@ -159,7 +159,7 @@ fun AttachmentsBottomSheet(
                     OutlinedTextField(
                         value = payload,
                         onValueChange = { payload = it },
-                        label = { Text(if (kind == "youtube") "YouTube Video URL (paste URL)" else if (kind == "draw") "Drawing JSON (elements)" else "HTML / JS Simulation Code") },
+                        label = { Text(if (kind == "youtube") "YouTube Video URL (paste URL)" else if (kind == "excalidraw") "Drawing JSON (elements)" else "HTML / JS Simulation Code") },
                         placeholder = {
                             if (kind == "youtube") {
                                 Text("https://www.youtube.com/watch?v=...")
@@ -176,11 +176,11 @@ fun AttachmentsBottomSheet(
                     onClick = {
                         val finalTitle = when (kind) {
                             "youtube" -> "YouTube Video"
-                            "draw" -> title.trim().ifBlank { "Drawing Canvas" }
+                            "excalidraw" -> title.trim().ifBlank { "Whiteboard Canvas" }
                             else -> title.trim()
                         }
-                        val finalPayload = if (kind == "draw" && payload.isBlank()) "{\"elements\":[]}" else payload.trim()
-                        if (finalPayload.isNotBlank() && (kind == "youtube" || kind == "draw" || finalTitle.isNotBlank())) {
+                        val finalPayload = if (kind == "excalidraw" && payload.isBlank()) "{\"elements\":[]}" else payload.trim()
+                        if (finalPayload.isNotBlank() && (kind == "youtube" || kind == "excalidraw" || finalTitle.isNotBlank())) {
                             onAddAttachment(finalTitle, kind, finalPayload)
                             title = ""
                             payload = ""
