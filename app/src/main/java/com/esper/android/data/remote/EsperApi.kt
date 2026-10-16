@@ -59,6 +59,9 @@ data class RemoteNotebook(
     val coverPreset: String?,
     val coverImage: String?,
     val isPinned: Boolean?,
+    @SerializedName("isEncrypted") val isEncrypted: Boolean?,
+    val wrappedDek: String?,
+    val cryptoSalt: String?,
     val pages: List<RemotePage>?,
     val canvases: List<RemoteCanvas>?,
     val questions: List<RemoteQuestion>?

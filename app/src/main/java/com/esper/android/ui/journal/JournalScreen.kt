@@ -98,6 +98,72 @@ fun JournalScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
             )
+        },
+        // Thumb-reachable page stepper: Previous / counter / Next.
+        bottomBar = {
+            if (pages.isNotEmpty()) {
+                Surface(
+                    color = CosmicSlate,
+                    border = BorderStroke(1.dp, BorderSlate),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilledTonalIconButton(
+                            onClick = { if (activePageIndex > 0) activePageIndex-- },
+                            enabled = activePageIndex > 0,
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = SurfaceSlate,
+                                disabledContainerColor = CosmicSlate
+                            ),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.ChevronLeft,
+                                contentDescription = "Previous Entry",
+                                tint = if (activePageIndex > 0) TextPrimary else TextMuted
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = SpaceBlack,
+                            border = BorderStroke(1.dp, BorderSlate.copy(alpha = 0.5f))
+                        ) {
+                            Text(
+                                text = "Entry ${activePageIndex + 1} of ${pages.size}",
+                                color = IndigoGlow,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                            )
+                        }
+
+                        FilledTonalIconButton(
+                            onClick = { if (activePageIndex < pages.size - 1) activePageIndex++ },
+                            enabled = activePageIndex < pages.size - 1,
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = SurfaceSlate,
+                                disabledContainerColor = CosmicSlate
+                            ),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.ChevronRight,
+                                contentDescription = "Next Entry",
+                                tint = if (activePageIndex < pages.size - 1) TextPrimary else TextMuted
+                            )
+                        }
+                    }
+                }
+            }
         }
     ) { innerPadding ->
         Column(
@@ -106,54 +172,6 @@ fun JournalScreen(
                 .padding(innerPadding)
                 .background(SpaceBlack)
         ) {
-            if (pages.isNotEmpty()) {
-                Surface(
-                    color = CosmicSlate,
-                    border = BorderStroke(1.dp, BorderSlate),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = { if (activePageIndex > 0) activePageIndex-- },
-                            enabled = activePageIndex > 0,
-                            modifier = Modifier.size(30.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.ChevronLeft,
-                                contentDescription = "Previous Entry",
-                                tint = if (activePageIndex > 0) IndigoGlow else TextMuted
-                            )
-                        }
-                        Surface(shape = RoundedCornerShape(8.dp), color = SpaceBlack) {
-                            Text(
-                                text = "Entry ${activePageIndex + 1} of ${pages.size}",
-                                color = TextPrimary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = { if (activePageIndex < pages.size - 1) activePageIndex++ },
-                            enabled = activePageIndex < pages.size - 1,
-                            modifier = Modifier.size(30.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.ChevronRight,
-                                contentDescription = "Next Entry",
-                                tint = if (activePageIndex < pages.size - 1) IndigoGlow else TextMuted
-                            )
-                        }
-                    }
-                }
-            }
-
             if (activePage != null) {
                 key(activePage.id) {
                     ComposeLexicalEditor(

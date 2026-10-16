@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -16,6 +17,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -33,17 +36,15 @@ fun TabsScreen(
     onCloseAllTabs: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
-    BackHandler {
-        onNavigateBack()
-    }
+    BackHandler { onNavigateBack() }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
-                        Text("Open Tabs", fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 16.sp)
-                        Text("${openNotebooks.size} active notebooks", color = IndigoGlow, fontSize = 11.sp)
+                        Text("Active Tabs", fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 16.sp)
+                        Text("${openNotebooks.size} notebooks open", color = IndigoGlow, fontSize = 11.sp)
                     }
                 },
                 navigationIcon = {
@@ -87,37 +88,79 @@ fun TabsScreen(
                 ) {
                     items(openNotebooks, key = { it.id }) { notebook ->
                         val isActive = notebook.id == activeNotebookId
+                        val gradient = when (notebook.coverPreset) {
+                            "quantum" -> listOf(Color(0xFF064E3B), Color(0xFF134E4A))
+                            "solar" -> listOf(Color(0xFF78350F), Color(0xFF451A03))
+                            else -> listOf(Color(0xFF1E1B4B), Color(0xFF2E1065))
+                        }
+
                         Surface(
                             shape = RoundedCornerShape(14.dp),
-                            color = if (isActive) Color(0xFF312E81) else CosmicSlate,
+                            color = if (isActive) Color(0xFF312E81).copy(alpha = 0.5f) else CosmicSlate,
                             border = BorderStroke(1.dp, if (isActive) IndigoGlow else BorderSlate),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
+                                    // Switch tab and immediately transition to workspace
                                     onSelectTab(notebook.id)
-                                    onNavigateBack()
                                 }
                         ) {
                             Row(
-                                modifier = Modifier.padding(16.dp),
+                                modifier = Modifier.padding(14.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = notebook.title,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextPrimary,
-                                        fontSize = 15.sp,
-                                        maxLines = 1
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = notebook.tagsCsv.ifBlank { "General" },
-                                        color = if (isActive) IndigoGlow else TextMuted,
-                                        fontSize = 12.sp
-                                    )
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Book miniature preview
+                                    Box(
+                                        modifier = Modifier
+                                            .size(width = 32.dp, height = 44.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(Brush.verticalGradient(gradient)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = notebook.title.take(1).uppercase(),
+                                            color = Color.White.copy(alpha = 0.7f),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(12.dp))
+
+                                    Column {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = notebook.title,
+                                                fontWeight = FontWeight.Bold,
+                                                color = TextPrimary,
+                                                fontSize = 14.sp,
+                                                maxLines = 1
+                                            )
+                                            if (isActive) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(6.dp)
+                                                        .clip(CircleShape)
+                                                        .background(EmeraldSync)
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Text(
+                                            text = notebook.tagsCsv.ifBlank { "General" },
+                                            color = if (isActive) IndigoGlow else TextMuted,
+                                            fontSize = 11.sp
+                                        )
+                                    }
                                 }
+
                                 IconButton(
                                     onClick = { onCloseTab(notebook.id) },
                                     modifier = Modifier.size(28.dp)

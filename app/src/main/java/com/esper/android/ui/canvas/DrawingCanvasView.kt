@@ -1,297 +1,434 @@
 package com.esper.android.ui.canvas
 
-import androidx.compose.foundation.Canvas
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.ui.theme.BorderSlate
 import com.esper.android.ui.theme.CosmicSlate
+import com.esper.android.ui.theme.IndigoAccent
 import com.esper.android.ui.theme.IndigoGlow
+import com.esper.android.ui.theme.SpaceBlack
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 
-data class CanvasDrawingData(
-    val elements: List<CanvasElement> = emptyList()
-)
-
-sealed class CanvasElement {
-    data class FreehandPath(
-        val points: List<Point>,
-        val color: Color,
-        val strokeWidth: Float
-    ) : CanvasElement()
-
-    data class Line(
-        val start: Point,
-        val end: Point,
-        val color: Color,
-        val strokeWidth: Float
-    ) : CanvasElement()
-
-    data class Rectangle(
-        val x: Float,
-        val y: Float,
-        val width: Float,
-        val height: Float,
-        val color: Color,
-        val strokeWidth: Float,
-        val fill: Boolean = false
-    ) : CanvasElement()
-
-    data class Circle(
-        val cx: Float,
-        val cy: Float,
-        val radius: Float,
-        val color: Color,
-        val strokeWidth: Float,
-        val fill: Boolean = false
-    ) : CanvasElement()
-
-    data class Label(
-        val text: String,
-        val x: Float,
-        val y: Float,
-        val color: Color,
-        val fontSize: Float
-    ) : CanvasElement()
-}
-
-data class Point(val x: Float, val y: Float)
-
-object CanvasDataParser {
-    private val gson = Gson()
-
-    fun parse(rawJson: String): List<CanvasElement> {
-        if (rawJson.isBlank()) return emptyList()
-        val elements = mutableListOf<CanvasElement>()
-
-        try {
-            val root = gson.fromJson(rawJson, JsonObject::class.java)
-
-            val array: JsonArray? = when {
-                root.has("elements") && root.get("elements").isJsonArray -> root.getAsJsonArray("elements")
-                root.has("shapes") && root.get("shapes").isJsonArray -> root.getAsJsonArray("shapes")
-                else -> null
-            }
-
-            array?.forEach { elemJson ->
-                if (!elemJson.isJsonObject) return@forEach
-                val obj = elemJson.asJsonObject
-                val type = obj.get("type")?.asString?.lowercase() ?: "path"
-                val strokeHex = obj.get("color")?.asString ?: obj.get("strokeColor")?.asString ?: "#818CF8"
-                val strokeColor = parseHexColor(strokeHex)
-                val strokeWidth = obj.get("strokeWidth")?.asFloat ?: 3f
-
-                when (type) {
-                    "path", "freehand", "freedraw" -> {
-                        val pts = mutableListOf<Point>()
-                        val baseX = obj.get("x")?.asFloat ?: 0f
-                        val baseY = obj.get("y")?.asFloat ?: 0f
-
-                        val ptsArray = if (obj.has("points") && obj.get("points").isJsonArray) obj.getAsJsonArray("points") else null
-                        ptsArray?.forEach { ptElem ->
-                            if (ptElem.isJsonArray) {
-                                val pair = ptElem.asJsonArray
-                                if (pair.size() >= 2) {
-                                    pts.add(Point(baseX + pair[0].asFloat, baseY + pair[1].asFloat))
-                                }
-                            } else if (ptElem.isJsonObject) {
-                                val pObj = ptElem.asJsonObject
-                                pts.add(Point(baseX + (pObj.get("x")?.asFloat ?: 0f), baseY + (pObj.get("y")?.asFloat ?: 0f)))
-                            }
-                        }
-                        if (pts.isNotEmpty()) {
-                            elements.add(CanvasElement.FreehandPath(pts, strokeColor, strokeWidth))
-                        }
-                    }
-                    "line" -> {
-                        val sx = obj.get("startX")?.asFloat ?: obj.get("x")?.asFloat ?: 0f
-                        val sy = obj.get("startY")?.asFloat ?: obj.get("y")?.asFloat ?: 0f
-                        val ex = obj.get("endX")?.asFloat ?: (sx + (obj.get("width")?.asFloat ?: 100f))
-                        val ey = obj.get("endY")?.asFloat ?: (sy + (obj.get("height")?.asFloat ?: 100f))
-                        elements.add(CanvasElement.Line(Point(sx, sy), Point(ex, ey), strokeColor, strokeWidth))
-                    }
-                    "rectangle", "rect" -> {
-                        val x = obj.get("x")?.asFloat ?: 0f
-                        val y = obj.get("y")?.asFloat ?: 0f
-                        val w = obj.get("width")?.asFloat ?: 100f
-                        val h = obj.get("height")?.asFloat ?: 100f
-                        elements.add(CanvasElement.Rectangle(x, y, w, h, strokeColor, strokeWidth))
-                    }
-                    "circle", "ellipse" -> {
-                        val x = obj.get("x")?.asFloat ?: 0f
-                        val y = obj.get("y")?.asFloat ?: 0f
-                        val w = obj.get("width")?.asFloat ?: 80f
-                        elements.add(CanvasElement.Circle(x + w / 2, y + w / 2, w / 2, strokeColor, strokeWidth))
-                    }
-                    "text" -> {
-                        val t = obj.get("text")?.asString ?: ""
-                        val x = obj.get("x")?.asFloat ?: 0f
-                        val y = obj.get("y")?.asFloat ?: 0f
-                        val fs = obj.get("fontSize")?.asFloat ?: 16f
-                        elements.add(CanvasElement.Label(t, x, y, strokeColor, fs))
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-
-        return elements
-    }
-
-    private fun parseHexColor(hex: String): Color {
-        return try {
-            val clean = hex.removePrefix("#")
-            when (clean.length) {
-                6, 8 -> Color(android.graphics.Color.parseColor("#$clean"))
-                else -> Color(0xFF818CF8)
-            }
-        } catch (_: Exception) {
-            Color(0xFF818CF8)
-        }
-    }
-}
-
+/**
+ * Android Read-Only Whiteboard:
+ * Rasterizes Excalidraw/vector elements into an offscreen high-DPI Bitmap once.
+ * Touch gestures pan and zoom the pre-rendered image smoothly at 60/120fps.
+ */
 @Composable
 fun DrawingCanvasView(
     rawJson: String,
     modifier: Modifier = Modifier
 ) {
-    val elements = remember(rawJson) { CanvasDataParser.parse(rawJson) }
+    var renderedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
+
+    LaunchedEffect(rawJson) {
+        val bmp = withContext(Dispatchers.Default) {
+            WhiteboardBitmapRenderer.render(rawJson)
+        }
+        renderedBitmap = bmp
+        scale = 1f
+        offset = Offset.Zero
+    }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF020617))
+            .background(SpaceBlack)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onDoubleTap = {
+                        scale = 1f
+                        offset = Offset.Zero
+                    }
+                )
+            }
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan, zoom, _ ->
-                    scale = (scale * zoom).coerceIn(0.4f, 4f)
+                    scale = (scale * zoom).coerceIn(0.3f, 5.0f)
                     offset += pan
                 }
             }
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            drawGrid(scale, offset)
-
-            elements.forEach { elem ->
-                when (elem) {
-                    is CanvasElement.FreehandPath -> {
-                        if (elem.points.size > 1) {
-                            val path = Path()
-                            val first = transformPoint(elem.points.first(), scale, offset)
-                            path.moveTo(first.x, first.y)
-                            for (i in 1 until elem.points.size) {
-                                val pt = transformPoint(elem.points[i], scale, offset)
-                                path.lineTo(pt.x, pt.y)
-                            }
-                            drawPath(
-                                path = path,
-                                color = elem.color,
-                                style = Stroke(width = elem.strokeWidth * scale)
-                            )
-                        }
+        val bitmap = renderedBitmap
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = "Whiteboard Canvas",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
                     }
-                    is CanvasElement.Line -> {
-                        val s = transformPoint(elem.start, scale, offset)
-                        val e = transformPoint(elem.end, scale, offset)
-                        drawLine(
-                            color = elem.color,
-                            start = s,
-                            end = e,
-                            strokeWidth = elem.strokeWidth * scale
-                        )
-                    }
-                    is CanvasElement.Rectangle -> {
-                        val p = transformPoint(Point(elem.x, elem.y), scale, offset)
-                        drawRect(
-                            color = elem.color,
-                            topLeft = p,
-                            size = Size(elem.width * scale, elem.height * scale),
-                            style = Stroke(width = elem.strokeWidth * scale)
-                        )
-                    }
-                    is CanvasElement.Circle -> {
-                        val c = transformPoint(Point(elem.cx, elem.cy), scale, offset)
-                        drawCircle(
-                            color = elem.color,
-                            radius = elem.radius * scale,
-                            center = c,
-                            style = Stroke(width = elem.strokeWidth * scale)
-                        )
-                    }
-                    is CanvasElement.Label -> {
-                        val p = transformPoint(Point(elem.x, elem.y), scale, offset)
-                        val paint = android.graphics.Paint().apply {
-                            color = elem.color.toArgb()
-                            textSize = elem.fontSize * scale
-                            isAntiAlias = true
-                        }
-                        drawContext.canvas.nativeCanvas.drawText(elem.text, p.x, p.y, paint)
-                    }
-                }
-            }
+            )
         }
 
+        // Top Status Badge: Read-Only Whiteboard
         Surface(
-            shape = RoundedCornerShape(8.dp),
+            shape = RoundedCornerShape(10.dp),
             color = CosmicSlate.copy(alpha = 0.85f),
             border = androidx.compose.foundation.BorderStroke(1.dp, BorderSlate),
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(10.dp)
+                .padding(12.dp)
         ) {
-            Text(
-                text = "Canvas Engine · ${elements.size} elements · ${(scale * 100).toInt()}%",
-                color = IndigoGlow,
-                fontSize = 11.sp,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(IndigoAccent)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Whiteboard · Read Only · ${(scale * 100).toInt()}%",
+                    color = IndigoGlow,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+
+        // Floating Zoom / Pan Reset Controls
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = CosmicSlate.copy(alpha = 0.9f),
+            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSlate),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = { scale = (scale + 0.25f).coerceAtMost(5.0f) },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Zoom In", tint = IndigoGlow, modifier = Modifier.size(16.dp))
+                }
+                IconButton(
+                    onClick = {
+                        scale = 1f
+                        offset = Offset.Zero
+                    },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(Icons.Default.CenterFocusStrong, contentDescription = "Reset View", tint = Color.White, modifier = Modifier.size(16.dp))
+                }
+                IconButton(
+                    onClick = { scale = (scale - 0.25f).coerceAtLeast(0.3f) },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(Icons.Default.Remove, contentDescription = "Zoom Out", tint = IndigoGlow, modifier = Modifier.size(16.dp))
+                }
+            }
         }
     }
 }
 
-private fun transformPoint(p: Point, scale: Float, offset: Offset): Offset {
-    return Offset(p.x * scale + offset.x, p.y * scale + offset.y)
-}
+private object WhiteboardBitmapRenderer {
+    private const val DEFAULT_WIDTH = 2048
+    private const val DEFAULT_HEIGHT = 1440
+    private const val PADDING = 100f
 
-private fun DrawScope.drawGrid(scale: Float, offset: Offset) {
-    val step = 32f * scale
-    if (step < 12f) return
-    val startX = (offset.x % step)
-    val startY = (offset.y % step)
+    fun render(rawJson: String): Bitmap {
+        val elements = parseElements(rawJson)
 
-    var x = startX
-    while (x < size.width) {
-        var y = startY
-        while (y < size.height) {
-            drawCircle(
-                color = Color(0xFF1E293B).copy(alpha = 0.6f),
-                radius = 1.2f,
-                center = Offset(x, y)
-            )
-            y += step
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = Float.MIN_VALUE
+        var maxY = Float.MIN_VALUE
+
+        elements.forEach { el ->
+            minX = minOf(minX, el.bounds.left)
+            minY = minOf(minY, el.bounds.top)
+            maxX = maxOf(maxX, el.bounds.right)
+            maxY = maxOf(maxY, el.bounds.bottom)
         }
-        x += step
+
+        val contentWidth = if (maxX > minX) (maxX - minX + PADDING * 2).toInt() else DEFAULT_WIDTH
+        val contentHeight = if (maxY > minY) (maxY - minY + PADDING * 2).toInt() else DEFAULT_HEIGHT
+
+        val bmpWidth = contentWidth.coerceIn(1200, 3200)
+        val bmpHeight = contentHeight.coerceIn(800, 2400)
+
+        val bitmap = Bitmap.createBitmap(bmpWidth, bmpHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+
+        // 1. Dark Blueprint Background
+        canvas.drawColor(android.graphics.Color.parseColor("#020617"))
+
+        // 2. Blueprint Dot Grid
+        val gridPaint = Paint().apply {
+            color = android.graphics.Color.parseColor("#1E293B")
+            alpha = 110
+            isAntiAlias = true
+        }
+        val step = 40f
+        var gx = 0f
+        while (gx < bmpWidth) {
+            var gy = 0f
+            while (gy < bmpHeight) {
+                canvas.drawCircle(gx, gy, 1.4f, gridPaint)
+                gy += step
+            }
+            gx += step
+        }
+
+        // Center elements if bounding box is smaller than canvas
+        val shiftX = if (minX < Float.MAX_VALUE) PADDING - minX else 0f
+        val shiftY = if (minY < Float.MAX_VALUE) PADDING - minY else 0f
+        canvas.translate(shiftX, shiftY)
+
+        // 3. Render Whiteboard Shapes & Paths
+        elements.forEach { it.draw(canvas) }
+
+        return bitmap
+    }
+
+    private fun parseElements(raw: String): List<RenderableElement> {
+        if (raw.isBlank()) return emptyList()
+        val list = mutableListOf<RenderableElement>()
+
+        try {
+            val root = Gson().fromJson(raw, JsonObject::class.java)
+            val arr: JsonArray? = when {
+                root.has("elements") && root.get("elements").isJsonArray -> root.getAsJsonArray("elements")
+                root.has("shapes") && root.get("shapes").isJsonArray -> root.getAsJsonArray("shapes")
+                else -> null
+            }
+
+            arr?.forEach { elem ->
+                if (!elem.isJsonObject) return@forEach
+                val o = elem.asJsonObject
+                val kind = (o.get("type")?.asString ?: o.get("tool")?.asString ?: "path").lowercase()
+                val hex = o.get("strokeColor")?.asString ?: o.get("color")?.asString ?: "#818CF8"
+                val strokeColor = parseColor(hex)
+                val strokeW = o.get("strokeWidth")?.asFloat ?: o.get("width")?.asFloat ?: 3.5f
+
+                when (kind) {
+                    "rect", "rectangle" -> {
+                        val x = o.get("x")?.asFloat ?: 0f
+                        val y = o.get("y")?.asFloat ?: 0f
+                        val w = o.get("w")?.asFloat ?: o.get("width")?.asFloat ?: 100f
+                        val h = o.get("h")?.asFloat ?: o.get("height")?.asFloat ?: 100f
+                        list.add(RectElement(x, y, w, h, strokeColor, strokeW))
+                    }
+                    "circle", "ellipse" -> {
+                        val x = o.get("x")?.asFloat ?: 0f
+                        val y = o.get("y")?.asFloat ?: 0f
+                        val w = o.get("w")?.asFloat ?: o.get("width")?.asFloat ?: 100f
+                        val h = o.get("h")?.asFloat ?: o.get("height")?.asFloat ?: 100f
+                        list.add(CircleElement(x, y, w, h, strokeColor, strokeW))
+                    }
+                    "arrow", "line" -> {
+                        val x = o.get("x")?.asFloat ?: 0f
+                        val y = o.get("y")?.asFloat ?: 0f
+                        val w = o.get("w")?.asFloat ?: o.get("width")?.asFloat ?: 120f
+                        val h = o.get("h")?.asFloat ?: o.get("height")?.asFloat ?: 60f
+                        list.add(ArrowElement(x, y, x + w, y + h, strokeColor, strokeW))
+                    }
+                    "pencil", "freedraw", "freehand", "path" -> {
+                        val pts = mutableListOf<Pair<Float, Float>>()
+                        val bx = o.get("x")?.asFloat ?: 0f
+                        val by = o.get("y")?.asFloat ?: 0f
+                        val ptsArr = o.get("points")?.takeIf { it.isJsonArray }?.asJsonArray
+                        ptsArr?.forEach { p ->
+                            if (p.isJsonArray) {
+                                val pair = p.asJsonArray
+                                if (pair.size() >= 2) pts.add(Pair(bx + pair[0].asFloat, by + pair[1].asFloat))
+                            } else if (p.isJsonObject) {
+                                val po = p.asJsonObject
+                                pts.add(Pair(bx + (po.get("x")?.asFloat ?: 0f), by + (po.get("y")?.asFloat ?: 0f)))
+                            }
+                        }
+                        if (pts.isNotEmpty()) list.add(PathElement(pts, strokeColor, strokeW))
+                    }
+                    "text" -> {
+                        val text = o.get("text")?.asString ?: "Text"
+                        val x = o.get("x")?.asFloat ?: 0f
+                        val y = o.get("y")?.asFloat ?: 0f
+                        val size = o.get("fontSize")?.asFloat ?: 18f
+                        list.add(TextElement(text, x, y, strokeColor, size))
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        return list
+    }
+
+    private fun parseColor(hex: String): Int {
+        return try {
+            val clean = hex.removePrefix("#")
+            android.graphics.Color.parseColor("#$clean")
+        } catch (_: Exception) {
+            android.graphics.Color.parseColor("#818CF8")
+        }
+    }
+
+    private interface RenderableElement {
+        val bounds: RectF
+        fun draw(canvas: Canvas)
+    }
+
+    private class RectElement(
+        val x: Float, val y: Float, val w: Float, val h: Float,
+        val color: Int, val strokeWidth: Float
+    ) : RenderableElement {
+        override val bounds = RectF(minOf(x, x + w), minOf(y, y + h), maxOf(x, x + w), maxOf(y, y + h))
+        override fun draw(canvas: Canvas) {
+            val paint = Paint().apply {
+                color = this@RectElement.color
+                style = Paint.Style.STROKE
+                strokeWidth = this@RectElement.strokeWidth
+                isAntiAlias = true
+            }
+            canvas.drawRoundRect(bounds, 8f, 8f, paint)
+        }
+    }
+
+    private class CircleElement(
+        val x: Float, val y: Float, val w: Float, val h: Float,
+        val color: Int, val strokeWidth: Float
+    ) : RenderableElement {
+        override val bounds = RectF(minOf(x, x + w), minOf(y, y + h), maxOf(x, x + w), maxOf(y, y + h))
+        override fun draw(canvas: Canvas) {
+            val paint = Paint().apply {
+                color = this@CircleElement.color
+                style = Paint.Style.STROKE
+                strokeWidth = this@CircleElement.strokeWidth
+                isAntiAlias = true
+            }
+            canvas.drawOval(bounds, paint)
+        }
+    }
+
+    private class ArrowElement(
+        val x1: Float, val y1: Float, val x2: Float, val y2: Float,
+        val color: Int, val strokeWidth: Float
+    ) : RenderableElement {
+        override val bounds = RectF(minOf(x1, x2) - 20f, minOf(y1, y2) - 20f, maxOf(x1, x2) + 20f, maxOf(y1, y2) + 20f)
+        override fun draw(canvas: Canvas) {
+            val paint = Paint().apply {
+                color = this@ArrowElement.color
+                style = Paint.Style.STROKE
+                strokeWidth = this@ArrowElement.strokeWidth
+                strokeCap = Paint.Cap.ROUND
+                isAntiAlias = true
+            }
+            canvas.drawLine(x1, y1, x2, y2, paint)
+
+            // Sharp arrow tip
+            val angle = atan2((y2 - y1).toDouble(), (x2 - x1).toDouble())
+            val headLen = 22f
+            val path = android.graphics.Path()
+            path.moveTo(x2, y2)
+            path.lineTo(
+                (x2 - headLen * cos(angle - Math.PI / 6)).toFloat(),
+                (y2 - headLen * sin(angle - Math.PI / 6)).toFloat()
+            )
+            path.moveTo(x2, y2)
+            path.lineTo(
+                (x2 - headLen * cos(angle + Math.PI / 6)).toFloat(),
+                (y2 - headLen * sin(angle + Math.PI / 6)).toFloat()
+            )
+            canvas.drawPath(path, paint)
+        }
+    }
+
+    private class PathElement(
+        val points: List<Pair<Float, Float>>,
+        val color: Int, val strokeWidth: Float
+    ) : RenderableElement {
+        override val bounds: RectF = RectF().apply {
+            if (points.isNotEmpty()) {
+                left = points.minOf { it.first }
+                top = points.minOf { it.second }
+                right = points.maxOf { it.first }
+                bottom = points.maxOf { it.second }
+            }
+        }
+
+        override fun draw(canvas: Canvas) {
+            if (points.size < 2) return
+            val paint = Paint().apply {
+                color = this@PathElement.color
+                style = Paint.Style.STROKE
+                strokeWidth = this@PathElement.strokeWidth
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
+                isAntiAlias = true
+            }
+            val path = android.graphics.Path()
+            path.moveTo(points[0].first, points[0].second)
+            for (i in 1 until points.size) {
+                path.lineTo(points[i].first, points[i].second)
+            }
+            canvas.drawPath(path, paint)
+        }
+    }
+
+    private class TextElement(
+        val text: String, val x: Float, val y: Float,
+        val color: Int, val fontSize: Float
+    ) : RenderableElement {
+        override val bounds = RectF(x, y - fontSize, x + text.length * fontSize * 0.6f, y + 10f)
+        override fun draw(canvas: Canvas) {
+            val paint = Paint().apply {
+                color = this@TextElement.color
+                textSize = this@TextElement.fontSize
+                isAntiAlias = true
+                typeface = android.graphics.Typeface.SANS_SERIF
+            }
+            canvas.drawText(text, x, y, paint)
+        }
     }
 }

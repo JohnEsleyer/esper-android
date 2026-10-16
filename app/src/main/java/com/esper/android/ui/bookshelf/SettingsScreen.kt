@@ -1,5 +1,8 @@
 package com.esper.android.ui.bookshelf
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -12,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,12 +39,18 @@ fun SettingsScreen(
     shelfCount: Int,
     onUpdateDisplayName: (String) -> Unit,
     onExportZip: () -> Unit,
+    onImportPackage: (Uri) -> Unit,
     onSyncNow: () -> Unit,
     onSignOut: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
     var nameInput by remember(currentDisplayName) { mutableStateOf(currentDisplayName) }
     var isSavedNotice by remember { mutableStateOf(false) }
+    val importPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) onImportPackage(uri)
+    }
 
     Scaffold(
         topBar = {
@@ -183,6 +193,17 @@ fun SettingsScreen(
                         Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Export All Notebooks as ZIP")
+                    }
+
+                    OutlinedButton(
+                        onClick = { importPicker.launch("*/*") },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = EmeraldSync),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Import Book Package (.zip / .esper / .json)")
                     }
 
                     OutlinedButton(

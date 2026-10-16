@@ -249,7 +249,7 @@ fun WorkspaceScreen(
                                         hostState = youtubeHostState,
                                         modifier = Modifier.fillMaxSize()
                                     )
-                                } else if (canvas.kind == "draw" || canvas.kind == "excalidraw" || canvas.kind == "canvas") {
+                                } else if (canvas.kind == "draw" || canvas.kind == "excalidraw" || canvas.kind == "canvas" || canvas.kind == "whiteboard") {
                                     DrawingCanvasView(
                                         rawJson = canvas.payloadJson,
                                         modifier = Modifier.fillMaxSize()
@@ -450,9 +450,16 @@ fun WorkspaceScreen(
     }
 }
 
-private fun extractYouTubeId(url: String): String {
-    val trimmed = url.trim()
+private fun extractYouTubeId(raw: String): String {
+    val trimmed = raw.trim()
+    val candidate = if (trimmed.startsWith("{") && trimmed.contains("\"url\"")) {
+        try {
+            val obj = com.google.gson.JsonParser.parseString(trimmed).asJsonObject
+            obj.get("url")?.asString ?: trimmed
+        } catch (_: Exception) { trimmed }
+    } else trimmed
+
     val pattern = Regex("(?:youtube\\.com\\/(?:[^/]+\\/.+\\/|(?:v|e(?:mbed)?|shorts|live)\\/|.*[?&]v=)|youtu\\.be\\/)([^\"&?/\\s]{11})")
-    val match = pattern.find(trimmed)
-    return match?.groupValues?.get(1) ?: trimmed.takeIf { it.length == 11 } ?: trimmed
+    val match = pattern.find(candidate)
+    return match?.groupValues?.get(1) ?: candidate.takeIf { it.length == 11 } ?: candidate
 }

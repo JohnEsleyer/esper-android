@@ -11,9 +11,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.room.Room
 import com.esper.android.data.crypto.CryptoEngine
 import com.esper.android.data.export.ZipExporter
+import com.esper.android.data.export.ZipImporter
 import com.esper.android.data.local.EsperDatabase
 import com.esper.android.data.model.*
 import com.esper.android.data.remote.RemoteClient
@@ -36,9 +40,12 @@ import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.userProfileChangeRequest
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 enum class ActiveScreen {
     BOOKSHELF,
@@ -69,8 +76,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             EsperTheme {
                 val coroutineScope = rememberCoroutineScope()
-                var currentScreen by remember { mutableStateOf(ActiveScreen.BOOKSHELF) }
-                var previousScreen by remember { mutableStateOf(ActiveScreen.BOOKSHELF) }
+                var screenStack by remember { mutableStateOf(listOf(ActiveScreen.BOOKSHELF)) }
+                val currentScreen = screenStack.lastOrNull() ?: ActiveScreen.BOOKSHELF
+
                 var activeNotebookId by remember { mutableStateOf<String?>(null) }
                 var activePageIndex by remember { mutableIntStateOf(0) }
                 var activeEditingQuestion by remember { mutableStateOf<QuestionEntity?>(null) }
@@ -81,18 +89,28 @@ class MainActivity : ComponentActivity() {
                 var isOfflineMode by remember { mutableStateOf(false) }
 
                 fun navigateTo(screen: ActiveScreen) {
-                    previousScreen = currentScreen
-                    currentScreen = screen
+                    if (screen == ActiveScreen.BOOKSHELF) {
+                        screenStack = listOf(ActiveScreen.BOOKSHELF)
+                    } else if (screenStack.lastOrNull() == screen) {
+                        // Already on target screen
+                    } else if (screen == ActiveScreen.WORKSPACE && screenStack.contains(ActiveScreen.TABS)) {
+                        // Switching tabs replaces the TABS route with WORKSPACE
+                        screenStack = listOf(ActiveScreen.BOOKSHELF, ActiveScreen.WORKSPACE)
+                    } else {
+                        screenStack = screenStack + screen
+                    }
                 }
 
                 fun popScreen() {
-                    currentScreen = previousScreen
+                    if (screenStack.size > 1) {
+                        screenStack = screenStack.dropLast(1)
+                    } else {
+                        screenStack = listOf(ActiveScreen.BOOKSHELF)
+                    }
                 }
 
-                if (currentScreen != ActiveScreen.BOOKSHELF && currentScreen != ActiveScreen.WORKSPACE) {
-                    BackHandler {
-                        popScreen()
-                    }
+                BackHandler(enabled = screenStack.size > 1) {
+                    popScreen()
                 }
 
                 fun updateAuthToken(user: FirebaseUser?) {
@@ -164,7 +182,7 @@ class MainActivity : ComponentActivity() {
                     currentUser = null
                     isOfflineMode = false
                     updateAuthToken(null)
-                    currentScreen = ActiveScreen.BOOKSHELF
+                    screenStack = listOf(ActiveScreen.BOOKSHELF)
                 }
 
                 LaunchedEffect(Unit) {
@@ -180,7 +198,7 @@ class MainActivity : ComponentActivity() {
                 val allDetails by db.dao().observeAllNotebooksWithDetails().collectAsState(initial = emptyList())
 
                 val openNotebooks = remember(notebooks, openTabIds) {
-                    notebooks.filter { openTabIds.contains(it.id) }
+                    openTabIds.mapNotNull { id -> notebooks.find { it.id == id } }
                 }
 
                 var customTags by remember {
@@ -254,15 +272,23 @@ class MainActivity : ComponentActivity() {
                 fun syncWithCloud() {
                     coroutineScope.launch(Dispatchers.IO) {
                         try {
+                            // Zero-knowledge parity with web decryptNotebook:
+                            // restricted/protected books arrive as enc:v1:...
+                            // and must be unwrapped before hitting Room,
+                            // otherwise the UI renders raw ciphertext.
+                            val cryptoKey = currentUser?.uid?.let { uid ->
+                                try { CryptoEngine.deriveKey(uid) } catch (_: Exception) { null }
+                            }
                             val remoteNotes = api.getUserNotes()
                             remoteNotes.forEach { r ->
                                 db.dao().upsertNotebook(
                                     NotebookEntity(
                                         id = r.id,
-                                        title = r.title,
-                                        description = r.description ?: "",
+                                        title = CryptoEngine.decrypt(r.title, cryptoKey),
+                                        description = CryptoEngine.decrypt(r.description ?: "", cryptoKey),
                                         ownerSub = currentUser?.uid ?: "*",
                                         visibility = r.visibility ?: "public",
+                                        isEncrypted = r.isEncrypted ?: false,
                                         isPinned = r.isPinned ?: false,
                                         tagsCsv = r.tags?.joinToString(",") ?: "",
                                         coverPreset = r.coverPreset ?: "celestial",
@@ -275,8 +301,8 @@ class MainActivity : ComponentActivity() {
                                         id = p.id,
                                         notebookId = r.id,
                                         parentId = p.parentId,
-                                        title = p.title,
-                                        notes = p.notes ?: "",
+                                        title = CryptoEngine.decrypt(p.title, cryptoKey),
+                                        notes = CryptoEngine.decrypt(p.notes ?: "", cryptoKey),
                                         position = p.position ?: idx
                                     )
                                 }?.let { db.dao().upsertPages(it) }
@@ -301,8 +327,8 @@ class MainActivity : ComponentActivity() {
                                     QuestionEntity(
                                         id = q.id,
                                         notebookId = r.id,
-                                        title = q.title,
-                                        answer = q.answer,
+                                        title = CryptoEngine.decrypt(q.title, cryptoKey),
+                                        answer = CryptoEngine.decrypt(q.answer, cryptoKey),
                                         position = q.position ?: idx
                                     )
                                 }?.let { db.dao().upsertQuestions(it) }
@@ -313,6 +339,52 @@ class MainActivity : ComponentActivity() {
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
                                 Toast.makeText(applicationContext, "Sync failed: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                }
+
+                // Real-time: refetch on foreground resume so edits made on
+                // web while the app was backgrounded appear immediately.
+                val lifecycleOwner = LocalLifecycleOwner.current
+                DisposableEffect(lifecycleOwner) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_RESUME) {
+                            if (currentUser != null || isOfflineMode) syncWithCloud()
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
+
+                // Real-time: long-lived SSE reader. Any broadcast data line
+                // triggers a background sync; reconnects with backoff.
+                // Derived from RemoteClient base URL so local dev still works.
+                LaunchedEffect(Unit) {
+                    withContext(Dispatchers.IO) {
+                        val sseClient = okhttp3.OkHttpClient.Builder()
+                            .readTimeout(0, TimeUnit.MILLISECONDS)
+                            .build()
+                        while (isActive) {
+                            try {
+                                val request = okhttp3.Request.Builder()
+                                    .url("${RemoteClient.BASE_URL}events")
+                                    .build()
+                                sseClient.newCall(request).execute().use { response ->
+                                    if (!response.isSuccessful) throw IllegalStateException("SSE HTTP ${response.code}")
+                                    val source = response.body?.source() ?: return@use
+                                    while (isActive && !source.exhausted()) {
+                                        val line = source.readUtf8Line() ?: break
+                                        if (line.startsWith("data:")) syncWithCloud()
+                                    }
+                                }
+                            } catch (_: Exception) {
+                                // Server down or offline: back off, then reconnect.
+                            }
+                            try {
+                                delay(5000)
+                            } catch (_: Exception) {
+                                break
                             }
                         }
                     }
@@ -394,7 +466,21 @@ class MainActivity : ComponentActivity() {
                                     db.dao().updateNotebookUpdatedAt("esper-journal", System.currentTimeMillis())
                                     launch(Dispatchers.IO) {
                                         try {
-                                            api.createPage("esper-journal", mapOf("id" to newPageId, "title" to dateTitle, "notes" to "# $dateTitle\n\n"))
+                                            // New entries inherit the journal's
+                                            // encryption flag like text patches do.
+                                            val isEncrypted = journalDetails?.notebook?.isEncrypted == true
+                                            val uid = currentUser?.uid
+                                            val key = if (isEncrypted && uid != null) {
+                                                try { CryptoEngine.deriveKey(uid) } catch (_: Exception) { null }
+                                            } else null
+                                            api.createPage(
+                                                "esper-journal",
+                                                mapOf(
+                                                    "id" to newPageId,
+                                                    "title" to CryptoEngine.encrypt(dateTitle, key),
+                                                    "notes" to CryptoEngine.encrypt("# $dateTitle\n\n", key)
+                                                )
+                                            )
                                         } catch (_: Exception) {}
                                     }
                                 }
@@ -412,8 +498,13 @@ class MainActivity : ComponentActivity() {
                     }
 
                     currentScreen == ActiveScreen.TABS -> {
+                        // Preserve tab ordering by openTabIds recency
+                        val orderedOpenNotebooks = remember(notebooks, openTabIds) {
+                            openTabIds.mapNotNull { id -> notebooks.find { it.id == id } }
+                        }
+
                         TabsScreen(
-                            openNotebooks = openNotebooks,
+                            openNotebooks = orderedOpenNotebooks,
                             activeNotebookId = activeNotebookId ?: "",
                             onSelectTab = { selectedId ->
                                 activeNotebookId = selectedId
@@ -426,6 +517,9 @@ class MainActivity : ComponentActivity() {
                                 if (activeNotebookId == closedId) {
                                     activeNotebookId = remaining.lastOrNull()
                                     activePageIndex = 0
+                                    if (activeNotebookId == null) {
+                                        navigateTo(ActiveScreen.BOOKSHELF)
+                                    }
                                 }
                             },
                             onCloseAllTabs = {
@@ -447,6 +541,77 @@ class MainActivity : ComponentActivity() {
                             onExportZip = {
                                 val fileName = ZipExporter.exportToDownloads(applicationContext, allDetails)
                                 Toast.makeText(applicationContext, "Saved: $fileName", Toast.LENGTH_LONG).show()
+                            },
+                            onImportPackage = { uri ->
+                                coroutineScope.launch {
+                                    try {
+                                        val imported = ZipImporter.importPackage(
+                                            applicationContext, uri, db, currentUser?.uid
+                                        )
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(
+                                                applicationContext,
+                                                "Imported \"${imported.title}\" (${imported.pages.size} chapters)",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                        if (!openTabIds.contains(imported.id)) {
+                                            openTabIds = openTabIds + imported.id
+                                        }
+                                        activeNotebookId = imported.id
+                                        activePageIndex = 0
+                                        navigateTo(ActiveScreen.WORKSPACE)
+                                        // Push the full book to the server so
+                                        // other devices receive it on next sync.
+                                        launch(Dispatchers.IO) {
+                                            try {
+                                                api.updateNote(
+                                                    imported.id,
+                                                    mapOf(
+                                                        "title" to imported.title,
+                                                        "description" to imported.description,
+                                                        "visibility" to imported.visibility,
+                                                        "tags" to imported.tagsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() },
+                                                        "coverPreset" to imported.coverPreset,
+                                                        "isPinned" to false,
+                                                        "pages" to imported.pages.map { p ->
+                                                            mapOf(
+                                                                "id" to p.id,
+                                                                "parentId" to p.parentId,
+                                                                "title" to p.title,
+                                                                "notes" to p.notes
+                                                            )
+                                                        },
+                                                        "canvases" to imported.canvases.map { c ->
+                                                            mapOf(
+                                                                "id" to c.id,
+                                                                "type" to c.kind,
+                                                                "title" to c.title,
+                                                                "assignedPages" to c.assignedPagesCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() },
+                                                                "data" to mapOf("code" to c.payloadJson)
+                                                            )
+                                                        },
+                                                        "questions" to imported.questions.map { q ->
+                                                            mapOf(
+                                                                "id" to q.id,
+                                                                "title" to q.title,
+                                                                "answer" to q.answer
+                                                            )
+                                                        }
+                                                    )
+                                                )
+                                            } catch (_: Exception) {}
+                                        }
+                                    } catch (e: Exception) {
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(
+                                                applicationContext,
+                                                "Import failed: ${e.message}",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    }
+                                }
                             },
                             onSyncNow = { syncWithCloud() },
                             onSignOut = { signOut() },
@@ -509,7 +674,8 @@ class MainActivity : ComponentActivity() {
 
                     activeNotebookId != null && currentScreen == ActiveScreen.WORKSPACE -> {
                         val details by db.dao().observeNotebookDetails(activeNotebookId!!).collectAsState(initial = null)
-                        details?.let { book ->
+                        key(activeNotebookId) {
+                            details?.let { book ->
                             WorkspaceScreen(
                                 notebookTitle = book.notebook.title,
                                 pages = book.pages,
@@ -537,7 +703,21 @@ class MainActivity : ComponentActivity() {
                                         )
                                         launch(Dispatchers.IO) {
                                             try {
-                                                api.createPage(book.notebook.id, mapOf("id" to newPageId, "title" to title, "parentId" to parentId))
+                                                val key = if (book.notebook.isEncrypted) {
+                                                    val uid = currentUser?.uid
+                                                    if (uid != null) {
+                                                        try { CryptoEngine.deriveKey(uid) } catch (_: Exception) { null }
+                                                    } else null
+                                                } else null
+                                                api.createPage(
+                                                    book.notebook.id,
+                                                    mapOf(
+                                                        "id" to newPageId,
+                                                        "title" to CryptoEngine.encrypt(title, key),
+                                                        "notes" to CryptoEngine.encrypt("# $title\n\n", key),
+                                                        "parentId" to parentId
+                                                    )
+                                                )
                                             } catch (_: Exception) {}
                                         }
                                     }
@@ -639,6 +819,7 @@ class MainActivity : ComponentActivity() {
                                     activeEditingQuestion = question
                                 }
                             )
+                        }
                         }
                     }
 
