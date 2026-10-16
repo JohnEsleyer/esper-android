@@ -29,11 +29,7 @@ fun BookCard(
     onClick: () -> Unit,
     onDelete: () -> Unit = {}
 ) {
-    val gradient = when (notebook.coverPreset) {
-        "quantum" -> listOf(Color(0xFF064E3B), Color(0xFF0F172A), Color(0xFF134E4A))
-        "solar" -> listOf(Color(0xFF78350F), Color(0xFF451A03), Color(0xFF0F172A))
-        else -> listOf(Color(0xFF1E1B4B), Color(0xFF0F172A), Color(0xFF2E1065))
-    }
+    val gradient = CoverThemeEngine.getTheme(notebook.coverPreset, notebook.coverImage).gradientColors
 
     val hasCoverImage = !notebook.coverImage.isNullOrBlank()
 

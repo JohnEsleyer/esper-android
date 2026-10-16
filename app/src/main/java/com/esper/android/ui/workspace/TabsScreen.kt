@@ -22,10 +22,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.esper.android.data.model.NotebookEntity
 import com.esper.android.data.model.PageEntity
 import com.esper.android.ui.theme.*
@@ -51,7 +53,7 @@ fun TabsScreen(
     onSelectTab: (docId: String, pageIndex: Int) -> Unit,
     onCloseTab: (String) -> Unit,
     onCloseAllTabs: () -> Unit,
-    onNewTabClick: () -> Unit, // Directs to Bookshelf to pick a new book
+    onNewTabClick: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
     BackHandler { onNavigateBack() }
@@ -140,105 +142,125 @@ fun TabsScreen(
                     items(openTabs, key = { it.notebook.id }) { tab ->
                         val notebook = tab.notebook
                         val isActive = notebook.id == activeNotebookId
-                        val (accentColor, gradient) = when (notebook.coverPreset) {
-                            "quantum" -> Color(0xFF34D399) to listOf(Color(0xFF064E3B), Color(0xFF134E4A))
-                            "solar"   -> Color(0xFFFBBF24) to listOf(Color(0xFF78350F), Color(0xFF451A03))
-                            "midnight"-> Color(0xFF60A5FA) to listOf(Color(0xFF1E293B), Color(0xFF1E3A8A))
-                            "crimson" -> Color(0xFFFB7185) to listOf(Color(0xFF881337), Color(0xFF4C0519))
-                            "nebula"  -> Color(0xFFC084FC) to listOf(Color(0xFF581C87), Color(0xFF3B0764))
-                            else      -> Color(0xFF818CF8) to listOf(Color(0xFF1E1B4B), Color(0xFF2E1065))
-                        }
+                        val theme = CoverThemeEngine.getTheme(notebook.coverPreset, notebook.coverImage)
 
                         Surface(
                             shape = RoundedCornerShape(14.dp),
-                            color = if (isActive) accentColor.copy(alpha = 0.12f) else CosmicSlate,
-                            border = BorderStroke(1.dp, if (isActive) accentColor else accentColor.copy(alpha = 0.35f)),
+                            color = CosmicSlate,
+                            border = BorderStroke(1.dp, if (isActive) theme.accentColor else theme.accentColor.copy(alpha = 0.4f)),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
                                 .clickable {
                                     onSelectTab(notebook.id, tab.pageNumber - 1)
                                 }
                         ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Brush.horizontalGradient(listOf(theme.gradientColors.first().copy(alpha = 0.4f), Color(0xFF0F172A))))
                             ) {
+                                // Book Spine matching the cover
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .width(5.dp)
+                                        .background(theme.spineColor)
+                                        .align(Alignment.CenterStart)
+                                )
+
                                 Row(
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier
+                                        .padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(width = 34.dp, height = 46.dp)
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(Brush.verticalGradient(gradient)),
-                                        contentAlignment = Alignment.Center
+                                    Row(
+                                        modifier = Modifier.weight(1f),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(
-                                            text = notebook.title.take(1).uppercase(),
-                                            color = Color.White.copy(alpha = 0.8f),
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp
+                                        // Miniature book cover with image or gradient
+                                        Box(
+                                            modifier = Modifier
+                                                .size(width = 34.dp, height = 46.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(Brush.verticalGradient(theme.gradientColors)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (!notebook.coverImage.isNullOrBlank()) {
+                                                AsyncImage(
+                                                    model = notebook.coverImage,
+                                                    contentDescription = null,
+                                                    contentScale = ContentScale.Crop,
+                                                    modifier = Modifier.fillMaxSize()
+                                                )
+                                            } else {
+                                                Text(
+                                                    text = notebook.title.take(1).uppercase(),
+                                                    color = Color.White.copy(alpha = 0.85f),
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 14.sp
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.width(12.dp))
+
+                                        Column {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = notebook.title,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = TextPrimary,
+                                                    fontSize = 14.sp,
+                                                    maxLines = 1
+                                                )
+                                                if (isActive) {
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(6.dp)
+                                                            .clip(CircleShape)
+                                                            .background(theme.accentColor)
+                                                    )
+                                                }
+                                            }
+
+                                            Spacer(modifier = Modifier.height(3.dp))
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = theme.tagBgColor
+                                                ) {
+                                                    Text(
+                                                        text = "Chapter ${tab.pageNumber}",
+                                                        color = theme.accentColor,
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 10.sp,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = notebook.tagsCsv.split(",").firstOrNull()?.trim()?.ifBlank { "General" } ?: "General",
+                                                    color = TextMuted,
+                                                    fontSize = 11.sp
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    IconButton(
+                                        onClick = { onCloseTab(notebook.id) },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = "Close tab",
+                                            tint = TextMuted,
+                                            modifier = Modifier.size(16.dp)
                                         )
                                     }
-
-                                    Spacer(modifier = Modifier.width(12.dp))
-
-                                    Column {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                text = notebook.title,
-                                                fontWeight = FontWeight.Bold,
-                                                color = TextPrimary,
-                                                fontSize = 14.sp,
-                                                maxLines = 1
-                                            )
-                                            if (isActive) {
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(6.dp)
-                                                        .clip(CircleShape)
-                                                        .background(accentColor)
-                                                )
-                                            }
-                                        }
-
-                                        Spacer(modifier = Modifier.height(3.dp))
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Surface(
-                                                shape = RoundedCornerShape(4.dp),
-                                                color = accentColor.copy(alpha = 0.2f)
-                                            ) {
-                                                Text(
-                                                    text = "Chapter ${tab.pageNumber}",
-                                                    color = accentColor,
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontSize = 10.sp,
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                )
-                                            }
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = notebook.tagsCsv.split(",").firstOrNull()?.trim()?.ifBlank { "General" } ?: "General",
-                                                color = TextMuted,
-                                                fontSize = 11.sp
-                                            )
-                                        }
-                                    }
-                                }
-
-                                IconButton(
-                                    onClick = { onCloseTab(notebook.id) },
-                                    modifier = Modifier.size(28.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        contentDescription = "Close tab",
-                                        tint = TextMuted,
-                                        modifier = Modifier.size(16.dp)
-                                    )
                                 }
                             }
                         }
@@ -263,47 +285,61 @@ fun TabsScreen(
                     }
 
                     items(recentPages) { recent ->
-                        val accentColor = when (recent.notebook.coverPreset) {
-                            "quantum" -> Color(0xFF34D399)
-                            "solar"   -> Color(0xFFFBBF24)
-                            "midnight"-> Color(0xFF60A5FA)
-                            "crimson" -> Color(0xFFFB7185)
-                            "nebula"  -> Color(0xFFC084FC)
-                            else      -> Color(0xFF818CF8)
-                        }
+                        val theme = CoverThemeEngine.getTheme(recent.notebook.coverPreset, recent.notebook.coverImage)
 
                         Surface(
                             shape = RoundedCornerShape(10.dp),
                             color = CosmicSlate.copy(alpha = 0.5f),
-                            border = BorderStroke(1.dp, BorderSlate.copy(alpha = 0.5f)),
+                            border = BorderStroke(1.dp, BorderSlate.copy(alpha = 0.4f)),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
                                 .clickable {
                                     onSelectTab(recent.notebook.id, recent.pageNumber - 1)
                                 }
                         ) {
                             Row(
-                                modifier = Modifier.padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = recent.page.title,
-                                        color = TextPrimary,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1
-                                    )
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(top = 2.dp)
-                                    ) {
-                                        Text(recent.notebook.title, color = accentColor, fontSize = 11.sp, maxLines = 1)
-                                        Text(" · Ch.${recent.pageNumber}", color = TextMuted, fontSize = 11.sp)
+                                // Mini Left spine matching the parent book's cover
+                                Box(
+                                    modifier = Modifier
+                                        .width(4.dp)
+                                        .height(44.dp)
+                                        .background(theme.spineColor)
+                                )
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = recent.page.title,
+                                            color = TextPrimary,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1
+                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        ) {
+                                            Text(recent.notebook.title, color = theme.accentColor, fontSize = 11.sp, maxLines = 1)
+                                            Text(" · Ch.${recent.pageNumber}", color = TextMuted, fontSize = 11.sp)
+                                        }
                                     }
+                                    Text(
+                                        "Jump →",
+                                        color = theme.accentColor,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
-                                Text("Jump →", color = accentColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
