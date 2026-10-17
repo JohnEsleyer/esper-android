@@ -30,6 +30,13 @@ interface EsperDao {
     @Query("SELECT * FROM notebooks WHERE id = :notebookId")
     suspend fun getNotebookById(notebookId: String): NotebookEntity?
 
+    @Transaction
+    @Query("SELECT * FROM notebooks WHERE id = :notebookId")
+    suspend fun getNotebookDetails(notebookId: String): NotebookWithDetails?
+
+    @Query("SELECT * FROM pages WHERE id = :pageId")
+    suspend fun getPageById(pageId: String): PageEntity?
+
     @Query("SELECT * FROM notebooks")
     suspend fun getAllNotebooksList(): List<NotebookEntity>
 

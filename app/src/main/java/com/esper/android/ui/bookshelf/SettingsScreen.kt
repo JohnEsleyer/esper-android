@@ -27,6 +27,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.remote.RemoteClient
+import com.esper.android.ui.components.LocalReadOnlyMode
+import com.esper.android.ui.components.OfflineNoticeBanner
 import com.esper.android.ui.theme.*
 import com.google.firebase.auth.FirebaseUser
 
@@ -35,8 +37,16 @@ import com.google.firebase.auth.FirebaseUser
 fun SettingsScreen(
     currentUser: FirebaseUser?,
     currentDisplayName: String,
+    memberType: String? = null,
+    maxNotebooks: Int? = null,
+    maxShelves: Int? = null,
+    // Null = unknown (offline/loading) or admin-immune; resolved below.
+    inactivityDays: Long? = null,
     notebookCount: Int,
     shelfCount: Int,
+    lastSyncError: String? = null,
+    apiBaseUrl: String = RemoteClient.DEFAULT_BASE_URL,
+    onApiBaseUrlChange: (String?) -> Unit = {},
     onUpdateDisplayName: (String) -> Unit,
     onExportZip: () -> Unit,
     onImportPackage: (Uri) -> Unit,
@@ -44,6 +54,7 @@ fun SettingsScreen(
     onSignOut: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
+    val isReadOnly = LocalReadOnlyMode.current
     var nameInput by remember(currentDisplayName) { mutableStateOf(currentDisplayName) }
     var isSavedNotice by remember { mutableStateOf(false) }
     val importPicker = rememberLauncherForActivityResult(
@@ -54,15 +65,20 @@ fun SettingsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Settings & Workspace", fontWeight = FontWeight.Bold, color = TextPrimary) },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
-            )
+            Column {
+                if (isReadOnly) {
+                    OfflineNoticeBanner()
+                }
+                TopAppBar(
+                    title = { Text("Settings & Workspace", fontWeight = FontWeight.Bold, color = TextPrimary) },
+                    navigationIcon = {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
+                )
+            }
         }
     ) { innerPadding ->
         Column(
@@ -123,6 +139,7 @@ fun SettingsScreen(
                                 isSavedNotice = false
                             },
                             singleLine = true,
+                            enabled = !isReadOnly,
                             modifier = Modifier.weight(1f)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -133,6 +150,7 @@ fun SettingsScreen(
                                     isSavedNotice = true
                                 }
                             },
+                            enabled = !isReadOnly,
                             colors = ButtonDefaults.buttonColors(containerColor = IndigoAccent),
                             shape = RoundedCornerShape(10.dp)
                         ) {
@@ -162,7 +180,7 @@ fun SettingsScreen(
                             color = IndigoAccent.copy(alpha = 0.25f)
                         ) {
                             Text(
-                                text = if (currentUser != null) "CLOUD SYNC" else "OFFLINE LOCAL",
+                                text = tierBadgeText(memberType, currentUser != null),
                                 color = IndigoGlow,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
@@ -170,9 +188,21 @@ fun SettingsScreen(
                             )
                         }
                     }
-                    Text("• Stored Notebooks: $notebookCount / 50 limit", color = TextSecondary, fontSize = 12.sp)
-                    Text("• Shelves: $shelfCount / 10 limit", color = TextSecondary, fontSize = 12.sp)
-                    Text("• Inactivity retention: 30 days cloud backup", color = AmberGlow, fontSize = 11.sp)
+                    // Live server quotas (GET /api/me). "…" while offline or still syncing.
+                    Text("• Stored Notebooks: $notebookCount / ${maxNotebooks ?: "…"} limit", color = TextSecondary, fontSize = 12.sp)
+                    Text("• Shelves: $shelfCount / ${maxShelves ?: "…"} limit", color = TextSecondary, fontSize = 12.sp)
+                    Text(
+                        text = retentionText(memberType, inactivityDays),
+                        color = AmberGlow,
+                        fontSize = 11.sp
+                    )
+                    if (lastSyncError != null) {
+                        Text(
+                            "• Last sync failed: $lastSyncError",
+                            color = RoseRuby,
+                            fontSize = 11.sp
+                        )
+                    }
                 }
             }
 
@@ -197,6 +227,7 @@ fun SettingsScreen(
 
                     OutlinedButton(
                         onClick = { importPicker.launch("*/*") },
+                        enabled = !isReadOnly,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = EmeraldSync),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -208,6 +239,7 @@ fun SettingsScreen(
 
                     OutlinedButton(
                         onClick = onSyncNow,
+                        enabled = !isReadOnly,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = IndigoGlow),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -218,10 +250,48 @@ fun SettingsScreen(
                     }
 
                     Text(
-                        text = "Base API: ${RemoteClient.BASE_URL}",
+                        text = "Base API: $apiBaseUrl",
                         color = TextMuted,
                         fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace
+                    )
+
+                    var endpointInput by remember(apiBaseUrl) { mutableStateOf(apiBaseUrl) }
+                    OutlinedTextField(
+                        value = endpointInput,
+                        onValueChange = { endpointInput = it },
+                        label = { Text("Custom API endpoint (blank = default)", fontSize = 11.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { onApiBaseUrlChange(endpointInput.ifBlank { null }) },
+                            colors = ButtonDefaults.buttonColors(containerColor = IndigoAccent),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Apply", fontSize = 12.sp)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                endpointInput = RemoteClient.DEFAULT_BASE_URL
+                                onApiBaseUrlChange(null)
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Reset", fontSize = 12.sp)
+                        }
+                    }
+                    Text(
+                        "Changing the endpoint rebuilds the API client; restart the app to reconnect SSE.",
+                        color = TextMuted,
+                        fontSize = 10.sp
                     )
                 }
             }

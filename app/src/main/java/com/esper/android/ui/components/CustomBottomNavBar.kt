@@ -39,6 +39,7 @@ fun CustomBottomNavBar(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isReadOnly = LocalReadOnlyMode.current
     var pageInputText by remember(currentPage) { mutableStateOf(currentPage.toString()) }
 
     Surface(
@@ -175,13 +176,14 @@ fun CustomBottomNavBar(
 
                 NavigationBarItem(
                     selected = false,
-                    onClick = onOpenCreateBook,
+                    enabled = !isReadOnly,
+                    onClick = { if (!isReadOnly) onOpenCreateBook() },
                     icon = {
                         Box(
                             modifier = Modifier
                                 .size(28.dp)
                                 .clip(CircleShape)
-                                .background(IndigoAccent),
+                                .background(if (isReadOnly) TextMuted else IndigoAccent),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(Icons.Default.Add, contentDescription = "Add", tint = Color.White, modifier = Modifier.size(18.dp))
@@ -190,7 +192,9 @@ fun CustomBottomNavBar(
                     label = { Text("New", fontSize = 10.sp) },
                     colors = NavigationBarItemDefaults.colors(
                         unselectedIconColor = IndigoAccent,
-                        unselectedTextColor = IndigoGlow
+                        unselectedTextColor = IndigoGlow,
+                        disabledIconColor = TextMuted,
+                        disabledTextColor = TextMuted
                     )
                 )
 

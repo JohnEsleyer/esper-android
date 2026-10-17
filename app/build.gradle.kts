@@ -37,6 +37,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -76,4 +77,6 @@ dependencies {
     implementation(libs.firebase.analytics)
     implementation(libs.play.services.auth)
     implementation(libs.youtube.player)
+
+    testImplementation(libs.junit4)
 }

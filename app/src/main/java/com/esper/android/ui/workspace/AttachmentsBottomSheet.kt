@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.model.CanvasEntity
+import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -28,6 +29,7 @@ fun AttachmentsBottomSheet(
     onDeleteAttachment: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val isReadOnly = LocalReadOnlyMode.current
     var showDialog by remember { mutableStateOf(false) }
     var title by remember { mutableStateOf("") }
     var kind by remember { mutableStateOf("html") }
@@ -50,8 +52,10 @@ fun AttachmentsBottomSheet(
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary
                 )
-                IconButton(onClick = { showDialog = true }) {
-                    Icon(Icons.Default.Add, contentDescription = "Add", tint = EmeraldSync)
+                if (!isReadOnly) {
+                    IconButton(onClick = { showDialog = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "Add", tint = EmeraldSync)
+                    }
                 }
             }
 
@@ -99,16 +103,18 @@ fun AttachmentsBottomSheet(
                                             modifier = Modifier.size(16.dp).padding(end = 8.dp)
                                         )
                                     }
-                                    IconButton(
-                                        onClick = { onDeleteAttachment(canvas.id) },
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Delete,
-                                            contentDescription = "Delete",
-                                            tint = RoseRuby.copy(alpha = 0.8f),
-                                            modifier = Modifier.size(16.dp)
-                                        )
+                                    if (!isReadOnly) {
+                                        IconButton(
+                                            onClick = { onDeleteAttachment(canvas.id) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = "Delete",
+                                                tint = RoseRuby.copy(alpha = 0.8f),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }

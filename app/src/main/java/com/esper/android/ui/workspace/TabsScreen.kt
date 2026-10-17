@@ -16,7 +16,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -164,7 +164,7 @@ fun TabsScreen(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxHeight()
-                                        .width(5.dp)
+                                        .width(6.dp)
                                         .background(theme.spineColor.copy(alpha = 0.55f))
                                         .align(Alignment.CenterStart)
                                 )
@@ -180,6 +180,11 @@ fun TabsScreen(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         // Miniature book cover with image or gradient
+                                        val coverModel = remember(notebook.coverImage) {
+                                            CoverImageHelper.resolveCoverModel(notebook.coverImage)
+                                        }
+                                        var isImageLoaded by remember(coverModel) { mutableStateOf(false) }
+
                                         Box(
                                             modifier = Modifier
                                                 .size(width = 34.dp, height = 46.dp)
@@ -187,14 +192,25 @@ fun TabsScreen(
                                                 .background(Brush.verticalGradient(theme.gradientColors)),
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            if (!notebook.coverImage.isNullOrBlank()) {
+                                            if (coverModel != null) {
                                                 AsyncImage(
-                                                    model = notebook.coverImage,
+                                                    model = coverModel,
                                                     contentDescription = null,
                                                     contentScale = ContentScale.Crop,
+                                                    onSuccess = { isImageLoaded = true },
+                                                    onError = { isImageLoaded = false },
                                                     modifier = Modifier.fillMaxSize()
                                                 )
-                                            } else {
+                                                if (isImageLoaded) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .background(Color.Black.copy(alpha = 0.22f))
+                                                    )
+                                                }
+                                            }
+
+                                            if (coverModel == null || !isImageLoaded) {
                                                 Text(
                                                     text = notebook.title.take(1).uppercase(),
                                                     color = Color.White.copy(alpha = 0.85f),

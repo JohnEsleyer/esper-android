@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.model.CanvasEntity
 import com.esper.android.data.model.PageEntity
+import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.theme.*
 
 @Composable
@@ -31,6 +32,7 @@ fun ChapterDrawerContent(
     onCreatePage: (title: String, parentId: String?) -> Unit,
     onDeletePage: (String) -> Unit
 ) {
+    val isReadOnly = LocalReadOnlyMode.current
     var showCreateDialog by remember { mutableStateOf(false) }
     var newPageTitle by remember { mutableStateOf("") }
     var selectedParentId by remember { mutableStateOf<String?>(null) }
@@ -60,11 +62,13 @@ fun ChapterDrawerContent(
                         color = TextPrimary
                     )
                 }
-                IconButton(onClick = {
-                    selectedParentId = null
-                    showCreateDialog = true
-                }) {
-                    Icon(Icons.Default.Add, contentDescription = "Add Chapter", tint = IndigoAccent)
+                if (!isReadOnly) {
+                    IconButton(onClick = {
+                        selectedParentId = null
+                        showCreateDialog = true
+                    }) {
+                        Icon(Icons.Default.Add, contentDescription = "Add Chapter", tint = IndigoAccent)
+                    }
                 }
             }
 
@@ -132,22 +136,24 @@ fun ChapterDrawerContent(
                                 }
                             }
 
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(
-                                    onClick = {
-                                        selectedParentId = page.id
-                                        showCreateDialog = true
-                                    },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(Icons.Default.Add, contentDescription = "Subchapter", tint = TextMuted, modifier = Modifier.size(14.dp))
-                                }
-                                if (pages.size > 1) {
+                            if (!isReadOnly) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
                                     IconButton(
-                                        onClick = { onDeletePage(page.id) },
+                                        onClick = {
+                                            selectedParentId = page.id
+                                            showCreateDialog = true
+                                        },
                                         modifier = Modifier.size(24.dp)
                                     ) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = RoseRuby.copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
+                                        Icon(Icons.Default.Add, contentDescription = "Subchapter", tint = TextMuted, modifier = Modifier.size(14.dp))
+                                    }
+                                    if (pages.size > 1) {
+                                        IconButton(
+                                            onClick = { onDeletePage(page.id) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = RoseRuby.copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
+                                        }
                                     }
                                 }
                             }

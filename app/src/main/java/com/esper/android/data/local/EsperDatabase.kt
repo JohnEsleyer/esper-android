@@ -12,7 +12,7 @@ import com.esper.android.data.model.*
         QuestionEntity::class,
         ShelfEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class EsperDatabase : RoomDatabase() {

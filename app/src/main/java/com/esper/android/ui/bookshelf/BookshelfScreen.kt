@@ -39,6 +39,8 @@ import com.esper.android.data.model.NotebookEntity
 import com.esper.android.data.model.ShelfEntity
 import com.esper.android.ui.components.BookCard
 import com.esper.android.ui.components.CustomBottomNavBar
+import com.esper.android.ui.components.LocalReadOnlyMode
+import com.esper.android.ui.components.OfflineNoticeBanner
 import com.esper.android.ui.components.PullToRefreshLayout
 import com.esper.android.ui.theme.*
 import com.google.firebase.auth.FirebaseUser
@@ -69,6 +71,7 @@ fun BookshelfScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val isReadOnly = LocalReadOnlyMode.current
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedShelfId by remember { mutableStateOf<String?>(null) }
@@ -245,11 +248,13 @@ fun BookshelfScreen(
                                             }
                                         }
                                     }
-                                    IconButton(
-                                        onClick = { onDeleteShelf(s.id) },
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = RoseRuby, modifier = Modifier.size(14.dp))
+                                    if (!isReadOnly) {
+                                        IconButton(
+                                            onClick = { onDeleteShelf(s.id) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = RoseRuby, modifier = Modifier.size(14.dp))
+                                        }
                                     }
                                 }
                             }
@@ -272,7 +277,11 @@ fun BookshelfScreen(
     ) {
         Scaffold(
             topBar = {
-                TopAppBar(
+                Column {
+                    if (isReadOnly) {
+                        OfflineNoticeBanner()
+                    }
+                    TopAppBar(
                     title = {
                         Surface(
                             shape = RoundedCornerShape(22.dp),
@@ -345,7 +354,8 @@ fun BookshelfScreen(
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
-                )
+                    )
+                }
             },
             bottomBar = {
                 CustomBottomNavBar(

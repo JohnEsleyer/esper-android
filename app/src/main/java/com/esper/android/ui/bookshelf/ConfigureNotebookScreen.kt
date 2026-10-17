@@ -141,6 +141,11 @@ fun ConfigureNotebookScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Live 3D Cover Preview
+            val previewModel = remember(sanitizedCover) {
+                CoverImageHelper.resolveCoverModel(sanitizedCover)
+            }
+            var isPreviewLoaded by remember(previewModel) { mutableStateOf(false) }
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -160,14 +165,25 @@ fun ConfigureNotebookScreen(
                             .fillMaxSize()
                             .background(Brush.verticalGradient(coverTheme.gradientColors))
                     ) {
-                        if (!sanitizedCover.isNullOrBlank()) {
+                        if (previewModel != null) {
                             AsyncImage(
-                                model = sanitizedCover,
+                                model = previewModel,
                                 contentDescription = title,
                                 contentScale = ContentScale.Crop,
+                                onSuccess = { isPreviewLoaded = true },
+                                onError = { isPreviewLoaded = false },
                                 modifier = Modifier.fillMaxSize()
                             )
-                        } else {
+                            if (isPreviewLoaded) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(Color.Black.copy(alpha = 0.22f))
+                                )
+                            }
+                        }
+
+                        if (previewModel == null || !isPreviewLoaded) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -206,16 +222,12 @@ fun ConfigureNotebookScreen(
                             }
                         }
 
-                        // Spine shadow overlay
+                        // Spine matching the cover (subtle translucent)
                         Box(
                             modifier = Modifier
                                 .fillMaxHeight()
-                                .width(8.dp)
-                                .background(
-                                    Brush.horizontalGradient(
-                                        listOf(Color.Black.copy(alpha = 0.45f), Color.Transparent)
-                                    )
-                                )
+                                .width(6.dp)
+                                .background(coverTheme.spineColor.copy(alpha = 0.55f))
                                 .align(Alignment.CenterStart)
                         )
                     }

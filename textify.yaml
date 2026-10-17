@@ -35,6 +35,14 @@ dirs:
         enabled: false
     .kotlin:
         enabled: false
+    docs:
+        enabled: true
+        extensions:
+            - md
+    docs/esper-main:
+        enabled: true
+        extensions:
+            - md
     app:
         enabled: true
         extensions:

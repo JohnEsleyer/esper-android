@@ -2,6 +2,7 @@ package com.esper.android.data.remote
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.esper.android.BuildConfig
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.auth.FirebaseAuth
 import com.google.gson.annotations.SerializedName
@@ -20,11 +21,27 @@ data class HealthResponse(
     val status: String?
 )
 
+data class MeUsage(
+    val notebook_count: Int = 0,
+    val shelf_count: Int = 0
+)
+
+data class MeLimits(
+    val max_notebooks: Int = 50,
+    val max_shelves: Int = 10,
+    val max_pages_per_book: Int = 100,
+    val max_visual_bytes: Int = 2097152,
+    // Null = immune (admin tier); mirrors server TierLimits::inactivity_days.
+    val inactivity_days: Long? = 30
+)
+
 data class MeResponse(
     val sub: String,
     val name: String?,
     val avatar: String?,
-    @SerializedName("member_type") val memberType: String?
+    @SerializedName("member_type") val memberType: String?,
+    val usage: MeUsage? = null,
+    val limits: MeLimits? = null
 )
 
 data class RemotePage(
@@ -59,9 +76,6 @@ data class RemoteNotebook(
     val coverPreset: String?,
     val coverImage: String?,
     val isPinned: Boolean?,
-    @SerializedName("isEncrypted") val isEncrypted: Boolean?,
-    val wrappedDek: String?,
-    val cryptoSalt: String?,
     val pages: List<RemotePage>?,
     val canvases: List<RemoteCanvas>?,
     val questions: List<RemoteQuestion>?
@@ -136,6 +150,17 @@ interface EsperApiService {
         @Path("pageId") pageId: String
     ): SyncResult
 
+    data class GuestTokenResponse(
+        val success: Boolean? = null,
+        val guestToken: String? = null
+    )
+
+    @POST("notes/{id}/verify-password")
+    suspend fun verifyPassword(
+        @Path("id") id: String,
+        @Body body: Map<String, String>
+    ): GuestTokenResponse
+
     @GET("shelves")
     suspend fun getShelves(): List<RemoteShelf>
 
@@ -150,7 +175,29 @@ interface EsperApiService {
 }
 
 object RemoteClient {
-    const val BASE_URL = "https://esper-api.johnesleyer.com/api/"
+    const val DEFAULT_BASE_URL = "https://esper-api.johnesleyer.com/api/"
+    private const val CONFIG_PREFS = "esper_config"
+    private const val BASE_URL_KEY = "api_base_url"
+
+    /** Effective base URL: manual override (Settings) or the default. */
+    fun baseUrl(context: Context): String {
+        val custom = context.getSharedPreferences(CONFIG_PREFS, Context.MODE_PRIVATE)
+            .getString(BASE_URL_KEY, null)?.trim()?.trimEnd('/')
+        return if (custom.isNullOrBlank()) DEFAULT_BASE_URL else "$custom/api/"
+    }
+
+    fun setBaseUrlOverride(context: Context, url: String?) {
+        val clean = url?.trim()?.trimEnd('/')
+        context.getSharedPreferences(CONFIG_PREFS, Context.MODE_PRIVATE).edit().apply {
+            if (clean.isNullOrBlank()) remove(BASE_URL_KEY) else putString(BASE_URL_KEY, clean)
+        }.apply()
+        invalidate()
+    }
+
+    /** Drop the cached service so the next call rebuilds with current config. */
+    fun invalidate() {
+        cachedService = null
+    }
 
     private var cachedService: EsperApiService? = null
 
@@ -184,8 +231,11 @@ object RemoteClient {
             chain.proceed(builder.build())
         }
 
+        // Full BODY logging only in debug builds: release logcat must never
+        // carry Firebase ID tokens or note contents.
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY
+            else HttpLoggingInterceptor.Level.BASIC
         }
 
         val okHttpClient = OkHttpClient.Builder()
@@ -196,7 +246,7 @@ object RemoteClient {
             .build()
 
         val retrofit = Retrofit.Builder()
-            .baseUrl(BASE_URL)
+            .baseUrl(baseUrl(context))
             .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()

@@ -9,7 +9,6 @@ data class NotebookEntity(
     val description: String,
     val ownerSub: String,
     val visibility: String = "public", // "public", "protected", "restricted"
-    val isEncrypted: Boolean = false,
     val coverPreset: String = "celestial",
     val coverImage: String? = null,
     val isPinned: Boolean = false,

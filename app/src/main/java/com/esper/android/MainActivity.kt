@@ -15,21 +15,31 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.room.Room
-import com.esper.android.data.crypto.CryptoEngine
 import com.esper.android.data.export.ZipExporter
 import com.esper.android.data.export.ZipImporter
 import com.esper.android.data.local.EsperDatabase
+import com.esper.android.data.local.NotebookWithDetails
 import com.esper.android.data.model.*
 import com.esper.android.data.remote.RemoteClient
+import com.esper.android.data.remote.MeLimits
 import com.esper.android.ui.auth.LoginScreen
 import com.esper.android.ui.bookshelf.AllTagsScreen
 import com.esper.android.ui.bookshelf.BookshelfScreen
 import com.esper.android.ui.bookshelf.ConfigureNotebookScreen
 import com.esper.android.ui.bookshelf.CreateNotebookScreen
 import com.esper.android.ui.bookshelf.SettingsScreen
+import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.journal.JournalScreen
 import com.esper.android.ui.theme.EsperTheme
+import com.esper.android.data.remote.GuestTokenStore
 import com.esper.android.data.remote.RemoteTabItem
+import com.esper.android.data.sync.NetworkMonitor
+import com.esper.android.data.sync.PrefsOpStore
+import com.esper.android.data.sync.SyncManager
+import com.esper.android.data.sync.SyncOp
+import com.esper.android.data.sync.WriteQueue
+import com.esper.android.ui.workspace.PasswordGate
+import com.esper.android.ui.workspace.PasswordGateDialog
 import com.esper.android.ui.workspace.QuestionEditorScreen
 import com.esper.android.ui.workspace.RecentPageItem
 import com.esper.android.ui.workspace.TabItemData
@@ -44,12 +54,9 @@ import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.userProfileChangeRequest
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 
 enum class ActiveScreen {
     BOOKSHELF,
@@ -74,6 +81,114 @@ class MainActivity : ComponentActivity() {
 
     private val api by lazy { RemoteClient.getService(applicationContext) }
 
+    // Offline write queue: every mutating call registers its op first and
+    // clears it on success. Leftovers replay from Room on reconnect/sync.
+    private val writeQueue by lazy {
+        WriteQueue(PrefsOpStore(getSharedPreferences("esper_sync", MODE_PRIVATE)))
+    }
+
+    // Guest tokens for password-protected notebooks (see GuestTokenStore).
+    private val guestTokens by lazy {
+        GuestTokenStore(getSharedPreferences("esper_guest", MODE_PRIVATE))
+    }
+
+    // Server ↔ Room reconciliation (no Compose state inside).
+    private val syncManager by lazy { SyncManager(api, db) }
+
+    private fun canvasDataForUpload(entity: CanvasEntity): Any {
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            (Gson().fromJson(entity.payloadJson, Map::class.java) as? Map<String, Any?>) ?: mapOf("code" to entity.payloadJson)
+        } catch (_: Exception) {
+            if (entity.kind == "youtube") mapOf("url" to entity.payloadJson)
+            else mapOf("code" to entity.payloadJson)
+        }
+    }
+
+    private fun fullBookPayload(details: NotebookWithDetails): Map<String, Any?> {
+        val nb = details.notebook
+        return mapOf(
+            "title" to nb.title,
+            "description" to nb.description,
+            "tags" to nb.tagsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() },
+            "coverPreset" to nb.coverPreset,
+            "coverImage" to nb.coverImage,
+            "visibility" to nb.visibility,
+            "isPinned" to nb.isPinned,
+            "pages" to details.pages.map {
+                mapOf("id" to it.id, "parentId" to it.parentId, "title" to it.title, "notes" to it.notes)
+            },
+            "canvases" to details.canvases.map { c ->
+                mapOf(
+                    "id" to c.id, "type" to c.kind, "title" to c.title,
+                    "assignedPages" to c.assignedPagesCsv.split(",").map { s -> s.trim() }.filter { it.isNotEmpty() },
+                    "data" to canvasDataForUpload(c)
+                )
+            },
+            "questions" to details.questions.map { q ->
+                mapOf("id" to q.id, "title" to q.title, "answer" to q.answer)
+            }
+        )
+    }
+
+    /**
+     * Replays one queued op against the server using current Room content.
+     * Returns true when the op is resolved (sent, or provably obsolete).
+     * 404 on update/create means the server side is gone → resolve.
+     */
+    private suspend fun replayOp(op: SyncOp): Boolean {
+        return try {
+            when (op) {
+                is SyncOp.PatchPage -> {
+                    val page = db.dao().getPageById(op.pageId) ?: return true
+                    api.patchPage(op.docId, op.pageId, mapOf("notes" to page.notes, "title" to page.title))
+                }
+                is SyncOp.CreatePage -> {
+                    val page = db.dao().getPageById(op.pageId) ?: return true
+                    try {
+                        api.createPage(
+                            op.docId,
+                            mapOf("id" to page.id, "title" to page.title, "notes" to page.notes, "parentId" to page.parentId)
+                        )
+                    } catch (e: Exception) {
+                        if (e is retrofit2.HttpException && e.code() == 404) {
+                            // Notebook itself is gone server-side: re-PUT the whole book.
+                            val details = db.dao().getNotebookDetails(op.docId) ?: return true
+                            api.updateNote(op.docId, fullBookPayload(details))
+                        } else throw e
+                    }
+                }
+                is SyncOp.FullBook -> {
+                    val details = db.dao().getNotebookDetails(op.docId) ?: return true
+                    try {
+                        api.updateNote(op.docId, fullBookPayload(details))
+                    } catch (e: Exception) {
+                        if (e is retrofit2.HttpException && e.code() == 404) {
+                            api.createNote(fullBookPayload(details) + ("id" to op.docId))
+                        } else throw e
+                    }
+                }
+                is SyncOp.DeletePage -> {
+                    try {
+                        api.deletePage(op.docId, op.pageId)
+                    } catch (e: Exception) {
+                        if (!(e is retrofit2.HttpException && e.code() == 404)) throw e
+                    }
+                }
+                is SyncOp.DeleteBook -> {
+                    try {
+                        api.deleteNote(op.docId)
+                    } catch (e: Exception) {
+                        if (!(e is retrofit2.HttpException && e.code() == 404)) throw e
+                    }
+                }
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -91,25 +206,17 @@ class MainActivity : ComponentActivity() {
                 var selectedTagFilter by remember { mutableStateOf("All") }
 
                 var openTabItems by remember {
-                    mutableStateOf(
-                        listOf(
-                            TabItemData(
-                                notebook = NotebookEntity(
-                                    id = "kepler-001",
-                                    title = "Kepler's Laws of Planetary Motion",
-                                    description = "Astrodynamics notebook with interactive elliptical simulations.",
-                                    ownerSub = "*",
-                                    tagsCsv = "Astrodynamics,Physics"
-                                ),
-                                pageNumber = 1,
-                                pageId = "p1"
-                            )
-                        )
-                    )
+                    mutableStateOf(emptyList<TabItemData>())
                 }
                 var recentPageItems by remember { mutableStateOf<List<RecentPageItem>>(emptyList()) }
                 var currentUser by remember { mutableStateOf<FirebaseUser?>(auth.currentUser) }
                 var isOfflineMode by remember { mutableStateOf(false) }
+
+                // Single source of truth for connectivity-driven read-only mode:
+                // offline gateway mode OR no validated network => whole app is read-only.
+                val isNetworkOnline by NetworkMonitor.observe(applicationContext)
+                    .collectAsState(initial = true)
+                val isReadOnly = !isNetworkOnline || isOfflineMode
 
                 fun persistTabsToServer(items: List<TabItemData>) {
                     if (currentUser == null) return
@@ -237,10 +344,29 @@ class MainActivity : ComponentActivity() {
                 val shelves by db.dao().observeAllShelves().collectAsState(initial = emptyList())
                 val allDetails by db.dao().observeAllNotebooksWithDetails().collectAsState(initial = emptyList())
 
-                // Fetch persisted tabs from server on sign-in (server wins when it has tabs).
+                // Server-resolved membership tier (GET /api/me). Null = unknown/offline;
+                // Settings falls back to visitor-limit placeholders until this resolves.
+                var memberType by remember { mutableStateOf<String?>(null) }
+                var tierLimits by remember { mutableStateOf<MeLimits?>(null) }
+
+                // Password gate for protected notebooks (server-verified,
+                // guest token cached in GuestTokenStore).
+                var passwordGate by remember { mutableStateOf<PasswordGate?>(null) }
+                var gateBusy by remember { mutableStateOf(false) }
+                var gateError by remember { mutableStateOf<String?>(null) }
+
+                // Fetch persisted tabs + membership tier on sign-in
+                // (server wins when it has tabs; tier drives Settings quotas).
                 LaunchedEffect(currentUser) {
                     if (currentUser != null) {
                         withContext(Dispatchers.IO) {
+                            try {
+                                val me = api.getMe()
+                                withContext(Dispatchers.Main) {
+                                    memberType = me.memberType
+                                    tierLimits = me.limits
+                                }
+                            } catch (_: Exception) {}
                             try {
                                 val serverTabs = api.getUserTabs()
                                 if (serverTabs.isNotEmpty()) {
@@ -260,11 +386,14 @@ class MainActivity : ComponentActivity() {
                                 }
                             } catch (_: Exception) {}
                         }
+                    } else {
+                        memberType = null
+                        tierLimits = null
                     }
                 }
 
                 var customTags by remember {
-                    mutableStateOf(listOf("Research", "Astrodynamics", "Physics", "Lectures", "Drafts"))
+                    mutableStateOf(listOf("Research", "Lectures", "Drafts"))
                 }
 
                 val allTags = remember(notebooks, customTags) {
@@ -276,38 +405,6 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(Unit) {
                     coroutineScope.launch {
-                        val prefs = getSharedPreferences("esper_prefs", Context.MODE_PRIVATE)
-                        val hasSeeded = prefs.getBoolean("has_seeded_kepler_v1", false)
-
-                        // Only seed once for first-time offline guest launch; never overwrite user cloud data
-                        if (!hasSeeded && currentUser == null) {
-                            val existing = db.dao().getNotebookById("kepler-001")
-                            if (existing == null) {
-                                db.dao().upsertNotebook(
-                                    NotebookEntity(
-                                        id = "kepler-001",
-                                        title = "Kepler's Laws of Planetary Motion",
-                                        description = "Astrodynamics notebook with interactive elliptical simulations.",
-                                        ownerSub = "*",
-                                        visibility = "public",
-                                        tagsCsv = "Astrodynamics,Physics",
-                                        updatedAt = System.currentTimeMillis()
-                                    )
-                                )
-                                db.dao().upsertPages(
-                                    listOf(
-                                        PageEntity(
-                                            id = "p1",
-                                            notebookId = "kepler-001",
-                                            title = "Introduction to Celestial Dynamics",
-                                            notes = "# Introduction to Celestial Dynamics\n\nWelcome to **Esper** on Android!\n",
-                                            position = 0
-                                        )
-                                    )
-                                )
-                            }
-                            prefs.edit().putBoolean("has_seeded_kepler_v1", true).apply()
-                        }
                         // Single-book journal seed (deterministic id shared with web).
                         val existingJournal = db.dao().getNotebookById("esper-journal")
                         if (existingJournal == null) {
@@ -338,138 +435,140 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Last sync outcome for the Settings screen. Null = never attempted
+                // or last attempt succeeded; otherwise the short failure reason.
+                var lastSyncError by remember { mutableStateOf<String?>(null) }
+
+                /** Replays queued offline writes from Room content. Best-effort:
+                 *  failures stay queued for the next pass. */
+                fun flushWriteQueue(onDone: (flushed: Int) -> Unit = {}) {
+                    coroutineScope.launch(Dispatchers.IO) {
+                        val ops = writeQueue.pending()
+                        if (ops.isEmpty()) {
+                            onDone(0)
+                            return@launch
+                        }
+                        var flushed = 0
+                        ops.forEach { op ->
+                            if (replayOp(op)) {
+                                writeQueue.markClean(op)
+                                flushed++
+                            }
+                        }
+                        val done = flushed
+                        withContext(Dispatchers.Main) { onDone(done) }
+                    }
+                }
+
+                fun openBookDirect(id: String) {
+                    val existing = openTabItems.find { it.notebook.id == id }
+                    if (existing == null) {
+                        val nb = notebooks.find { it.id == id }
+                        if (nb != null) {
+                            val updated = openTabItems + TabItemData(
+                                notebook = nb,
+                                pageNumber = 1,
+                                pageId = null
+                            )
+                            openTabItems = updated
+                            persistTabsToServer(updated)
+                        }
+                        activeNotebookId = id
+                        activePageIndex = 0
+                    } else {
+                        activeNotebookId = id
+                        activePageIndex = (existing.pageNumber - 1).coerceAtLeast(0)
+                    }
+                    navigateTo(ActiveScreen.WORKSPACE)
+                }
+
+                /** Owner bypasses the gate; everyone else needs a cached
+                 *  guest token or the book password (verified server-side). */
+                fun requestOpenBook(id: String) {
+                    val nb = notebooks.find { it.id == id }
+                    val locked = nb?.visibility == "protected" &&
+                        nb.ownerSub != currentUser?.uid &&
+                        guestTokens.get(id) == null
+                    if (locked && nb != null) {
+                        gateError = null
+                        passwordGate = PasswordGate(docId = id, title = nb.title)
+                    } else {
+                        openBookDirect(id)
+                    }
+                }
+
+                fun unlockProtected(docId: String, password: String) {
+                    gateBusy = true
+                    gateError = null
+                    coroutineScope.launch(Dispatchers.IO) {
+                        try {
+                            val res = api.verifyPassword(docId, mapOf("password" to password))
+                            val token = res.guestToken
+                                ?: throw IllegalStateException("No guest token issued")
+                            guestTokens.put(docId, token)
+                            // Pull the now-readable book into Room, then open it.
+                            val remote = api.getNote(docId, token)
+                            db.dao().upsertNotebook(
+                                NotebookEntity(
+                                    id = remote.id,
+                                    title = remote.title,
+                                    description = remote.description ?: "",
+                                    ownerSub = currentUser?.uid ?: "*",
+                                    visibility = remote.visibility ?: "protected",
+                                    isPinned = false,
+                                    tagsCsv = remote.tags?.joinToString(",") ?: "",
+                                    coverPreset = remote.coverPreset ?: "celestial",
+                                    coverImage = remote.coverImage,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
+                            remote.pages?.mapIndexed { idx, p ->
+                                PageEntity(
+                                    id = p.id, notebookId = remote.id, parentId = p.parentId,
+                                    title = p.title, notes = p.notes ?: "", position = p.position ?: idx
+                                )
+                            }?.let { db.dao().upsertPages(it) }
+                            withContext(Dispatchers.Main) {
+                                gateBusy = false
+                                passwordGate = null
+                                openBookDirect(docId)
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                gateBusy = false
+                                gateError = e.localizedMessage ?: "Unlock failed"
+                            }
+                        }
+                    }
+                }
+
                 fun syncWithCloud() {
                     coroutineScope.launch(Dispatchers.IO) {
                         try {
-                            val cryptoKey = currentUser?.uid?.let { uid ->
-                                try { CryptoEngine.deriveKey(uid) } catch (_: Exception) { null }
-                            }
-                            val remoteNotes = api.getUserNotes()
-                            val remoteIds = remoteNotes.map { it.id }.toSet()
-
-                            // Step A: Purge local notebooks that were deleted on web
-                            val localNotebooks = db.dao().getAllNotebooksList()
-                            localNotebooks.forEach { local ->
-                                if (local.id != "esper-journal" && !remoteIds.contains(local.id)) {
-                                    db.dao().deleteNotebookCascade(local.id)
-                                }
-                            }
+                            val report = syncManager.sync(currentUser?.uid)
 
                             // Step B: Reconcile open tabs
                             withContext(Dispatchers.Main) {
-                                openTabItems = openTabItems.filter { remoteIds.contains(it.notebook.id) || it.notebook.id == "esper-journal" }
-                                if (activeNotebookId != null && !remoteIds.contains(activeNotebookId) && activeNotebookId != "esper-journal") {
+                                openTabItems = openTabItems.filter { report.remoteIds.contains(it.notebook.id) || it.notebook.id == "esper-journal" }
+                                if (activeNotebookId != null && !report.remoteIds.contains(activeNotebookId) && activeNotebookId != "esper-journal") {
                                     val next = openTabItems.lastOrNull()
                                     activeNotebookId = next?.notebook?.id
                                     activePageIndex = (next?.pageNumber ?: 1) - 1
                                 }
                             }
 
-                            // Step C: Upsert remote notebooks and preserve whiteboard JSON
-                            remoteNotes.forEach { r ->
-                                db.dao().upsertNotebook(
-                                    NotebookEntity(
-                                        id = r.id,
-                                        title = CryptoEngine.decrypt(r.title, cryptoKey),
-                                        description = CryptoEngine.decrypt(r.description ?: "", cryptoKey),
-                                        ownerSub = currentUser?.uid ?: "*",
-                                        visibility = r.visibility ?: "public",
-                                        isEncrypted = r.isEncrypted ?: false,
-                                        isPinned = r.isPinned ?: false,
-                                        tagsCsv = r.tags?.joinToString(",") ?: "",
-                                        coverPreset = r.coverPreset ?: "celestial",
-                                        coverImage = r.coverImage,
-                                        updatedAt = System.currentTimeMillis()
-                                    )
-                                )
-                                r.pages?.mapIndexed { idx, p ->
-                                    PageEntity(
-                                        id = p.id,
-                                        notebookId = r.id,
-                                        parentId = p.parentId,
-                                        title = CryptoEngine.decrypt(p.title, cryptoKey),
-                                        notes = CryptoEngine.decrypt(p.notes ?: "", cryptoKey),
-                                        position = p.position ?: idx
-                                    )
-                                }?.let { db.dao().upsertPages(it) }
-
-                                r.canvases?.map { c ->
-                                    // Fix: Preserve whiteboard elements without truncating to ""
-                                    val payload = when (c.type.lowercase()) {
-                                        "html" -> {
-                                            when (val d = c.data) {
-                                                is String -> d
-                                                is Map<*, *> -> d["code"]?.toString() ?: Gson().toJson(d)
-                                                else -> Gson().toJson(d)
-                                            }
-                                        }
-                                        "youtube" -> {
-                                            when (val d = c.data) {
-                                                is String -> d
-                                                is Map<*, *> -> d["url"]?.toString() ?: Gson().toJson(d)
-                                                else -> Gson().toJson(d)
-                                            }
-                                        }
-                                        else -> {
-                                            // "excalidraw", "draw", "canvas"
-                                            when (val d = c.data) {
-                                                is String -> d
-                                                else -> Gson().toJson(d)
-                                            }
-                                        }
-                                    }
-                                    CanvasEntity(
-                                        id = c.id,
-                                        notebookId = r.id,
-                                        kind = c.type,
-                                        title = c.title,
-                                        payloadJson = payload,
-                                        assignedPagesCsv = c.assignedPages?.joinToString(",") ?: ""
-                                    )
-                                }?.let { db.dao().upsertCanvases(it) }
-
-                                r.questions?.mapIndexed { idx, q ->
-                                    QuestionEntity(
-                                        id = q.id,
-                                        notebookId = r.id,
-                                        title = CryptoEngine.decrypt(q.title, cryptoKey),
-                                        answer = CryptoEngine.decrypt(q.answer, cryptoKey),
-                                        position = q.position ?: idx
-                                    )
-                                }?.let { db.dao().upsertQuestions(it) }
-                            }
-
-                            // Step D: Reconcile shelves
-                            try {
-                                val remoteShelves = api.getShelves()
-                                val remoteShelfIds = remoteShelves.map { it.id }.toSet()
-                                val localShelves = db.dao().getAllShelvesList()
-                                localShelves.forEach { s ->
-                                    if (!remoteShelfIds.contains(s.id)) {
-                                        db.dao().deleteShelf(s.id)
-                                    }
-                                }
-                                remoteShelves.forEach { s ->
-                                    db.dao().upsertShelf(
-                                        ShelfEntity(
-                                            id = s.id,
-                                            title = s.title,
-                                            description = s.description ?: "",
-                                            color = s.color ?: "#6366F1",
-                                            coverPreset = s.coverPreset ?: "midnight",
-                                            position = s.position ?: 0,
-                                            notebookIdsCsv = s.notebookIds?.joinToString(",") ?: "",
-                                            updatedAt = System.currentTimeMillis()
-                                        )
-                                    )
-                                }
-                            } catch (_: Exception) {}
                             withContext(Dispatchers.Main) {
-                                Toast.makeText(applicationContext, "Synced ${remoteNotes.size} notebooks", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(applicationContext, "Synced ${report.noteCount} notebooks", Toast.LENGTH_SHORT).show()
+                                lastSyncError = null
                             }
+                            // Replay any writes that failed while offline, now that
+                            // we know the server is reachable.
+                            flushWriteQueue()
                         } catch (e: Exception) {
+                            val reason = e.localizedMessage ?: e.javaClass.simpleName
                             withContext(Dispatchers.Main) {
-                                Toast.makeText(applicationContext, "Sync failed: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                                Toast.makeText(applicationContext, "Sync failed: $reason", Toast.LENGTH_LONG).show()
+                                lastSyncError = reason
                             }
                         }
                     }
@@ -488,39 +587,29 @@ class MainActivity : ComponentActivity() {
                     onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
                 }
 
-                // Real-time: long-lived SSE reader. Any broadcast data line
-                // triggers a background sync; reconnects with backoff.
-                // Derived from RemoteClient base URL so local dev still works.
+                // Re-sync when connectivity returns (heals reads that failed
+                // offline; queued writes flush right after the fresh sync).
                 LaunchedEffect(Unit) {
-                    withContext(Dispatchers.IO) {
-                        val sseClient = okhttp3.OkHttpClient.Builder()
-                            .readTimeout(0, TimeUnit.MILLISECONDS)
-                            .build()
-                        while (isActive) {
-                            try {
-                                val request = okhttp3.Request.Builder()
-                                    .url("${RemoteClient.BASE_URL}events")
-                                    .build()
-                                sseClient.newCall(request).execute().use { response ->
-                                    if (!response.isSuccessful) throw IllegalStateException("SSE HTTP ${response.code}")
-                                    val source = response.body?.source() ?: return@use
-                                    while (isActive && !source.exhausted()) {
-                                        val line = source.readUtf8Line() ?: break
-                                        if (line.startsWith("data:")) syncWithCloud()
-                                    }
-                                }
-                            } catch (_: Exception) {
-                                // Server down or offline: back off, then reconnect.
-                            }
-                            try {
-                                delay(5000)
-                            } catch (_: Exception) {
-                                break
-                            }
+                    var wasOnline = true
+                    NetworkMonitor.observe(applicationContext).collect { online ->
+                        if (online && !wasOnline && currentUser != null) {
+                            syncWithCloud()
+                            flushWriteQueue()
                         }
+                        wasOnline = online
                     }
                 }
 
+                // Real-time: long-lived SSE reader. Any broadcast data line
+                // triggers a background sync; reconnects with backoff.
+                // Derived from the effective base URL so local dev still works.
+                LaunchedEffect(Unit) {
+                    syncManager.watchEvents(this, RemoteClient.baseUrl(applicationContext)) {
+                        syncWithCloud()
+                    }
+                }
+
+                CompositionLocalProvider(LocalReadOnlyMode provides isReadOnly) {
                 when {
                     currentUser == null && !isOfflineMode -> {
                         LoginScreen(
@@ -558,24 +647,17 @@ class MainActivity : ComponentActivity() {
                         JournalScreen(
                             pages = journalPages,
                             onSavePageNotes = { pageId, text ->
+                                if (isReadOnly) return@JournalScreen
                                 coroutineScope.launch {
                                     val derivedTitle = deriveChapterTitle(text)
                                     db.dao().updatePageNotesAndTitle(pageId, text, derivedTitle)
                                     db.dao().updateNotebookUpdatedAt("esper-journal", System.currentTimeMillis())
-                                    val uid = currentUser?.uid
+                                    val journalOp = SyncOp.PatchPage("esper-journal", pageId)
+                                    writeQueue.markDirty(journalOp)
                                     launch(Dispatchers.IO) {
                                         try {
-                                            var notesPayload: String = text
-                                            var titlePayload: String = derivedTitle
-                                            val isEncrypted = journalDetails?.notebook?.isEncrypted == true
-                                            if (isEncrypted && uid != null) {
-                                                try {
-                                                    val key = CryptoEngine.deriveKey(uid)
-                                                    notesPayload = CryptoEngine.encrypt(text, key)
-                                                    titlePayload = CryptoEngine.encrypt(derivedTitle, key)
-                                                } catch (_: Exception) {}
-                                            }
-                                            api.patchPage("esper-journal", pageId, mapOf("notes" to notesPayload, "title" to titlePayload))
+                                            api.patchPage("esper-journal", pageId, mapOf("notes" to text, "title" to derivedTitle))
+                                            writeQueue.markClean(journalOp)
                                         } catch (e: Exception) {
                                             Log.w("EsperSync", "journal patch failed for $pageId", e)
                                         }
@@ -583,6 +665,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onCreateNewPage = { dateTitle ->
+                                if (isReadOnly) return@JournalScreen
                                 coroutineScope.launch {
                                     val newPageId = "jp-${UUID.randomUUID().toString().take(8)}"
                                     db.dao().upsertPage(
@@ -595,32 +678,34 @@ class MainActivity : ComponentActivity() {
                                         )
                                     )
                                     db.dao().updateNotebookUpdatedAt("esper-journal", System.currentTimeMillis())
+                                    val journalCreateOp = SyncOp.CreatePage("esper-journal", newPageId)
+                                    writeQueue.markDirty(journalCreateOp)
                                     launch(Dispatchers.IO) {
                                         try {
-                                            // New entries inherit the journal's
-                                            // encryption flag like text patches do.
-                                            val isEncrypted = journalDetails?.notebook?.isEncrypted == true
-                                            val uid = currentUser?.uid
-                                            val key = if (isEncrypted && uid != null) {
-                                                try { CryptoEngine.deriveKey(uid) } catch (_: Exception) { null }
-                                            } else null
                                             api.createPage(
                                                 "esper-journal",
                                                 mapOf(
                                                     "id" to newPageId,
-                                                    "title" to CryptoEngine.encrypt(dateTitle, key),
-                                                    "notes" to CryptoEngine.encrypt("# $dateTitle\n\n", key)
+                                                    "title" to dateTitle,
+                                                    "notes" to "# $dateTitle\n\n"
                                                 )
                                             )
+                                            writeQueue.markClean(journalCreateOp)
                                         } catch (_: Exception) {}
                                     }
                                 }
                             },
                             onDeletePage = { pageId ->
+                                if (isReadOnly) return@JournalScreen
                                 coroutineScope.launch {
                                     db.dao().deletePageAndChildren(pageId)
+                                    val delOp = SyncOp.DeletePage("esper-journal", pageId)
+                                    writeQueue.markDirty(delOp)
                                     launch(Dispatchers.IO) {
-                                        try { api.deletePage("esper-journal", pageId) } catch (_: Exception) {}
+                                        try {
+                                            api.deletePage("esper-journal", pageId)
+                                            writeQueue.markClean(delOp)
+                                        } catch (_: Exception) {}
                                     }
                                 }
                             },
@@ -716,14 +801,32 @@ class MainActivity : ComponentActivity() {
                         SettingsScreen(
                             currentUser = currentUser,
                             currentDisplayName = currentUser?.displayName ?: "Esper User",
+                            memberType = memberType,
+                            maxNotebooks = tierLimits?.max_notebooks,
+                            maxShelves = tierLimits?.max_shelves,
+                            inactivityDays = tierLimits?.inactivity_days,
                             notebookCount = notebooks.size,
                             shelfCount = shelves.size,
-                            onUpdateDisplayName = { newName -> updateDisplayName(newName) },
+                            lastSyncError = lastSyncError,
+                            apiBaseUrl = RemoteClient.baseUrl(applicationContext),
+                            onApiBaseUrlChange = { url ->
+                                RemoteClient.setBaseUrlOverride(applicationContext, url)
+                                Toast.makeText(
+                                    applicationContext,
+                                    "Endpoint updated — restart the app to reconnect",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            },
+                            onUpdateDisplayName = { newName ->
+                                if (isReadOnly) return@SettingsScreen
+                                updateDisplayName(newName)
+                            },
                             onExportZip = {
                                 val fileName = ZipExporter.exportToDownloads(applicationContext, allDetails)
                                 Toast.makeText(applicationContext, "Saved: $fileName", Toast.LENGTH_LONG).show()
                             },
                             onImportPackage = { uri ->
+                                if (isReadOnly) return@SettingsScreen
                                 coroutineScope.launch {
                                     try {
                                         val imported = ZipImporter.importPackage(
@@ -745,6 +848,7 @@ class MainActivity : ComponentActivity() {
                                                 visibility = imported.visibility,
                                                 tagsCsv = imported.tagsCsv,
                                                 coverPreset = imported.coverPreset,
+                                                coverImage = imported.coverImage,
                                                 updatedAt = System.currentTimeMillis()
                                             )
                                             val updated = openTabItems + TabItemData(
@@ -760,6 +864,8 @@ class MainActivity : ComponentActivity() {
                                         navigateTo(ActiveScreen.WORKSPACE)
                                         // Push the full book to the server so
                                         // other devices receive it on next sync.
+                                        val importOp = SyncOp.FullBook(imported.id)
+                                        writeQueue.markDirty(importOp)
                                         launch(Dispatchers.IO) {
                                             try {
                                                 api.updateNote(
@@ -770,6 +876,7 @@ class MainActivity : ComponentActivity() {
                                                         "visibility" to imported.visibility,
                                                         "tags" to imported.tagsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() },
                                                         "coverPreset" to imported.coverPreset,
+                                                        "coverImage" to imported.coverImage,
                                                         "isPinned" to false,
                                                         "pages" to imported.pages.map { p ->
                                                             mapOf(
@@ -797,6 +904,7 @@ class MainActivity : ComponentActivity() {
                                                         }
                                                     )
                                                 )
+                                                writeQueue.markClean(importOp)
                                             } catch (_: Exception) {}
                                         }
                                     } catch (e: Exception) {
@@ -810,7 +918,10 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             },
-                            onSyncNow = { syncWithCloud() },
+                            onSyncNow = {
+                                if (isReadOnly) return@SettingsScreen
+                                syncWithCloud()
+                            },
                             onSignOut = { signOut() },
                             onNavigateBack = { popScreen() }
                         )
@@ -819,7 +930,18 @@ class MainActivity : ComponentActivity() {
                     currentScreen == ActiveScreen.CREATE_NOTEBOOK -> {
                         CreateNotebookScreen(
                             onSaveNotebook = { title, desc, tags, preset, coverImage ->
+                                if (isReadOnly) return@CreateNotebookScreen
                                 coroutineScope.launch {
+                                    tierLimits?.max_notebooks?.let { max ->
+                                        if (notebooks.size >= max) {
+                                            Toast.makeText(
+                                                applicationContext,
+                                                "Notebook limit reached ($max) for your plan",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                            return@launch
+                                        }
+                                    }
                                     val newId = "doc-${UUID.randomUUID().toString().take(8)}"
                                     val book = NotebookEntity(
                                         id = newId,
@@ -850,9 +972,12 @@ class MainActivity : ComponentActivity() {
                                     activeNotebookId = newId
                                     activePageIndex = 0
                                     navigateTo(ActiveScreen.WORKSPACE)
+                                    val createBookOp = SyncOp.FullBook(newId)
+                                    writeQueue.markDirty(createBookOp)
                                     launch(Dispatchers.IO) {
                                         try {
                                             api.createNote(mapOf("id" to newId, "title" to title, "description" to desc))
+                                            writeQueue.markClean(createBookOp)
                                         } catch (_: Exception) {}
                                     }
                                 }
@@ -867,6 +992,7 @@ class MainActivity : ComponentActivity() {
                             ConfigureNotebookScreen(
                                 notebook = targetBook,
                                 onSaveConfig = { title, desc, tags, preset, coverImage, visibility, password ->
+                                    if (isReadOnly) return@ConfigureNotebookScreen
                                     coroutineScope.launch {
                                         val updated = targetBook.copy(
                                             title = title,
@@ -893,6 +1019,8 @@ class MainActivity : ComponentActivity() {
                                         }
 
                                         // Background sync to server with full payload.
+                                        val configOp = SyncOp.FullBook(updated.id)
+                                        writeQueue.markDirty(configOp)
                                         launch(Dispatchers.IO) {
                                             try {
                                                 val details = db.dao().getPagesForNotebook(updated.id)
@@ -917,6 +1045,7 @@ class MainActivity : ComponentActivity() {
                                                     payload["password"] = password
                                                 }
                                                 api.updateNote(updated.id, payload)
+                                                writeQueue.markClean(configOp)
                                             } catch (e: Exception) {
                                                 Log.w("EsperConfig", "Failed to sync config to server", e)
                                             }
@@ -936,9 +1065,11 @@ class MainActivity : ComponentActivity() {
                             question = activeEditingQuestion!!,
                             onNavigateBack = { activeEditingQuestion = null },
                             onSaveAnswer = { qId, ans ->
+                                if (isReadOnly) return@QuestionEditorScreen
                                 coroutineScope.launch { db.dao().updateQuestionAnswer(qId, ans) }
                             },
                             onUpdateTitle = { qId, newTitle ->
+                                if (isReadOnly) return@QuestionEditorScreen
                                 coroutineScope.launch { db.dao().updateQuestionTitle(qId, newTitle) }
                             }
                         )
@@ -987,6 +1118,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onCreatePage = { title, parentId ->
+                                    if (isReadOnly) return@WorkspaceScreen
                                     coroutineScope.launch {
                                         val newPageId = "p-${UUID.randomUUID().toString().take(8)}"
                                         db.dao().upsertPage(
@@ -999,61 +1131,56 @@ class MainActivity : ComponentActivity() {
                                                 position = book.pages.size
                                             )
                                         )
+                                        val createOp = SyncOp.CreatePage(book.notebook.id, newPageId)
+                                        writeQueue.markDirty(createOp)
                                         launch(Dispatchers.IO) {
                                             try {
-                                                val key = if (book.notebook.isEncrypted) {
-                                                    val uid = currentUser?.uid
-                                                    if (uid != null) {
-                                                        try { CryptoEngine.deriveKey(uid) } catch (_: Exception) { null }
-                                                    } else null
-                                                } else null
                                                 api.createPage(
                                                     book.notebook.id,
                                                     mapOf(
                                                         "id" to newPageId,
-                                                        "title" to CryptoEngine.encrypt(title, key),
-                                                        "notes" to CryptoEngine.encrypt("# $title\n\n", key),
+                                                        "title" to title,
+                                                        "notes" to "# $title\n\n",
                                                         "parentId" to parentId
                                                     )
                                                 )
+                                                writeQueue.markClean(createOp)
                                             } catch (_: Exception) {}
                                         }
                                     }
                                 },
                                 onDeletePage = { pageId ->
+                                    if (isReadOnly) return@WorkspaceScreen
                                     coroutineScope.launch {
                                         db.dao().deletePageAndChildren(pageId)
+                                        val delOp = SyncOp.DeletePage(book.notebook.id, pageId)
+                                        writeQueue.markDirty(delOp)
                                         launch(Dispatchers.IO) {
-                                            try { api.deletePage(book.notebook.id, pageId) } catch (_: Exception) {}
+                                            try {
+                                                api.deletePage(book.notebook.id, pageId)
+                                                writeQueue.markClean(delOp)
+                                            } catch (_: Exception) {}
                                         }
                                     }
                                 },
                                 onSaveNotes = { pageId, text ->
+                                    if (isReadOnly) return@WorkspaceScreen
                                     coroutineScope.launch {
                                         // Parity with web extractFirstLineTitle: keep sidebar
                                         // title in sync with the first markdown line.
                                         val derivedTitle = deriveChapterTitle(text)
                                         db.dao().updatePageNotesAndTitle(pageId, text, derivedTitle)
                                         db.dao().updateNotebookUpdatedAt(book.notebook.id, System.currentTimeMillis())
-                                        val uid = currentUser?.uid
+                                        val patchOp = SyncOp.PatchPage(book.notebook.id, pageId)
+                                        writeQueue.markDirty(patchOp)
                                         launch(Dispatchers.IO) {
                                             try {
-                                                // Zero-knowledge parity: encrypt before PATCH
-                                                // when the book is flagged encrypted.
-                                                var notesPayload: String = text
-                                                var titlePayload: String = derivedTitle
-                                                if (book.notebook.isEncrypted && uid != null) {
-                                                    try {
-                                                        val key = CryptoEngine.deriveKey(uid)
-                                                        notesPayload = CryptoEngine.encrypt(text, key)
-                                                        titlePayload = CryptoEngine.encrypt(derivedTitle, key)
-                                                    } catch (_: Exception) {}
-                                                }
                                                 api.patchPage(
                                                     book.notebook.id,
                                                     pageId,
-                                                    mapOf("notes" to notesPayload, "title" to titlePayload)
+                                                    mapOf("notes" to text, "title" to derivedTitle)
                                                 )
+                                                writeQueue.markClean(patchOp)
                                             } catch (e: Exception) {
                                                 Log.w("EsperSync", "patchPage failed for $pageId", e)
                                             }
@@ -1061,6 +1188,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onAttachCanvas = { title, kind, payload ->
+                                    if (isReadOnly) return@WorkspaceScreen
                                     coroutineScope.launch {
                                         val canvasId = "c-${UUID.randomUUID().toString().take(8)}"
                                         val activePageId = book.pages.getOrNull(activePageIndex)?.id ?: ""
@@ -1077,15 +1205,18 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onDeleteCanvas = { canvasId ->
+                                    if (isReadOnly) return@WorkspaceScreen
                                     coroutineScope.launch { db.dao().deleteCanvas(canvasId) }
                                 },
                                 onUpdateCanvasPayload = { canvasId, payload ->
+                                    if (isReadOnly) return@WorkspaceScreen
                                     coroutineScope.launch {
                                         val existing = book.canvases.find { it.id == canvasId }
                                         if (existing != null) db.dao().upsertCanvas(existing.copy(payloadJson = payload))
                                     }
                                 },
                                 onAssignCanvasToPage = { canvasId ->
+                                    if (isReadOnly) return@WorkspaceScreen
                                     coroutineScope.launch {
                                         val existing = book.canvases.find { it.id == canvasId }
                                         val activePageId = book.pages.getOrNull(activePageIndex)?.id
@@ -1097,6 +1228,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onCreateQuestion = { qTitle ->
+                                    if (isReadOnly) return@WorkspaceScreen
                                     coroutineScope.launch {
                                         val qId = "q-${UUID.randomUUID().toString().take(8)}"
                                         val newQ = QuestionEntity(
@@ -1111,6 +1243,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onDeleteQuestion = { qId ->
+                                    if (isReadOnly) return@WorkspaceScreen
                                     coroutineScope.launch { db.dao().deleteQuestion(qId) }
                                 },
                                 onOpenQuestionEditor = { question ->
@@ -1131,31 +1264,14 @@ class MainActivity : ComponentActivity() {
                             onSelectTagFilter = { selectedTagFilter = it },
                             onSignOut = { signOut() },
                             onOpenNotebook = { id ->
-                                val existing = openTabItems.find { it.notebook.id == id }
-                                if (existing == null) {
-                                    val nb = notebooks.find { it.id == id }
-                                    if (nb != null) {
-                                        val updated = openTabItems + TabItemData(
-                                            notebook = nb,
-                                            pageNumber = 1,
-                                            pageId = null
-                                        )
-                                        openTabItems = updated
-                                        persistTabsToServer(updated)
-                                    }
-                                    activeNotebookId = id
-                                    activePageIndex = 0
-                                } else {
-                                    activeNotebookId = id
-                                    activePageIndex = (existing.pageNumber - 1).coerceAtLeast(0)
-                                }
-                                navigateTo(ActiveScreen.WORKSPACE)
+                                requestOpenBook(id)
                             },
                             onConfigureNotebook = { book ->
                                 configuringNotebook = book
                                 navigateTo(ActiveScreen.CONFIGURE_NOTEBOOK)
                             },
                             onDeleteNotebook = { id ->
+                                if (isReadOnly) return@BookshelfScreen
                                 coroutineScope.launch {
                                     db.dao().deleteNotebookCascade(id)
                                     val remaining = openTabItems.filter { it.notebook.id != id }
@@ -1167,16 +1283,32 @@ class MainActivity : ComponentActivity() {
                                         activePageIndex = (next?.pageNumber ?: 1) - 1
                                     }
                                     launch(Dispatchers.IO) {
-                                        try { api.deleteNote(id) } catch (_: Exception) {}
+                                        val delBookOp = SyncOp.DeleteBook(id)
+                                        writeQueue.markDirty(delBookOp)
+                                        try {
+                                            api.deleteNote(id)
+                                            writeQueue.markClean(delBookOp)
+                                        } catch (_: Exception) {}
                                     }
                                 }
                             },
                             onOpenAllTagsScreen = { navigateTo(ActiveScreen.ALL_TAGS) },
                             onOpenTabsScreen = { navigateTo(ActiveScreen.TABS) },
                             onOpenSettingsScreen = { navigateTo(ActiveScreen.SETTINGS) },
-                            onOpenCreateNotebookScreen = { navigateTo(ActiveScreen.CREATE_NOTEBOOK) },
+                            onOpenCreateNotebookScreen = {
+                                if (isReadOnly) {
+                                    Toast.makeText(
+                                        applicationContext,
+                                        "Creation disabled in offline mode",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                } else {
+                                    navigateTo(ActiveScreen.CREATE_NOTEBOOK)
+                                }
+                            },
                             onOpenJournalScreen = { navigateTo(ActiveScreen.JOURNAL) },
                             onDeleteShelf = { id ->
+                                if (isReadOnly) return@BookshelfScreen
                                 coroutineScope.launch {
                                     db.dao().deleteShelf(id)
                                     launch(Dispatchers.IO) {
@@ -1185,6 +1317,19 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onSyncWithRemote = { syncWithCloud() }
+                        )
+                    }
+                }
+
+                    // Password gate for protected notebooks.
+                    val gate = passwordGate
+                    if (gate != null) {
+                        PasswordGateDialog(
+                            gate = gate,
+                            busy = gateBusy,
+                            error = gateError,
+                            onConfirm = { password -> unlockProtected(gate.docId, password) },
+                            onDismiss = { passwordGate = null }
                         )
                     }
                 }
@@ -1197,7 +1342,7 @@ class MainActivity : ComponentActivity() {
  * Web parity (presets.extractFirstLineTitle): first non-empty markdown line,
  * stripped of heading/quote/list markers, max 100 chars.
  */
-private fun deriveChapterTitle(markdown: String): String {
+internal fun deriveChapterTitle(markdown: String): String {
     val firstLine = markdown.lineSequence()
         .map { it.trim() }
         .firstOrNull { it.isNotEmpty() }

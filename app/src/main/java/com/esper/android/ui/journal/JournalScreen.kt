@@ -16,6 +16,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.model.PageEntity
+import com.esper.android.ui.components.LocalReadOnlyMode
+import com.esper.android.ui.components.OfflineNoticeBanner
 import com.esper.android.ui.lexical.ComposeLexicalEditor
 import com.esper.android.ui.theme.*
 import java.text.SimpleDateFormat
@@ -30,6 +32,7 @@ fun JournalScreen(
     onDeletePage: (pageId: String) -> Unit,
     onNavigateBack: () -> Unit
 ) {
+    val isReadOnly = LocalReadOnlyMode.current
     BackHandler { onNavigateBack() }
 
     // Always open directly on the latest created page.
@@ -46,7 +49,11 @@ fun JournalScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            Column {
+                if (isReadOnly) {
+                    OfflineNoticeBanner()
+                }
+                TopAppBar(
                 title = {
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -78,26 +85,29 @@ fun JournalScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        val dateTitle = SimpleDateFormat("EEE, MMM d, h:mm a", Locale.getDefault()).format(Date())
-                        onCreateNewPage(dateTitle)
-                        // Jump to the newly appended latest entry.
-                        activePageIndex = pages.size
-                    }) {
-                        Icon(Icons.Default.Add, contentDescription = "New Entry", tint = IndigoAccent)
-                    }
-                    if (pages.size > 1 && activePage != null) {
+                    if (!isReadOnly) {
                         IconButton(onClick = {
-                            val idToDelete = activePage.id
-                            activePageIndex = (activePageIndex - 1).coerceAtLeast(0)
-                            onDeletePage(idToDelete)
+                            val dateTitle = SimpleDateFormat("EEE, MMM d, h:mm a", Locale.getDefault()).format(Date())
+                            onCreateNewPage(dateTitle)
+                            // Jump to the newly appended latest entry.
+                            activePageIndex = pages.size
                         }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete Entry", tint = RoseRuby)
+                            Icon(Icons.Default.Add, contentDescription = "New Entry", tint = IndigoAccent)
+                        }
+                        if (pages.size > 1 && activePage != null) {
+                            IconButton(onClick = {
+                                val idToDelete = activePage.id
+                                activePageIndex = (activePageIndex - 1).coerceAtLeast(0)
+                                onDeletePage(idToDelete)
+                            }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete Entry", tint = RoseRuby)
+                            }
                         }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
-            )
+                )
+            }
         },
         // Thumb-reachable page stepper: Previous / counter / Next.
         bottomBar = {
@@ -180,7 +190,8 @@ fun JournalScreen(
                             onSavePageNotes(activePage.id, updatedNotes)
                         },
                         onTimestampClicked = {},
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxSize(),
+                        readOnly = isReadOnly
                     )
                 }
             } else {

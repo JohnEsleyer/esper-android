@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.model.QuestionEntity
+import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -28,6 +29,7 @@ fun QuestionsBottomSheet(
     onDeleteQuestion: (String) -> Unit = {},
     onOpenQuestionEditor: (QuestionEntity) -> Unit = {}
 ) {
+    val isReadOnly = LocalReadOnlyMode.current
     var showCreateDialog by remember { mutableStateOf(false) }
     var newTitle by remember { mutableStateOf("") }
 
@@ -52,8 +54,10 @@ fun QuestionsBottomSheet(
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary
                 )
-                IconButton(onClick = { showCreateDialog = true }) {
-                    Icon(Icons.Default.Add, contentDescription = "Add Question", tint = AmberGlow)
+                if (!isReadOnly) {
+                    IconButton(onClick = { showCreateDialog = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "Add Question", tint = AmberGlow)
+                    }
                 }
             }
 
@@ -97,18 +101,20 @@ fun QuestionsBottomSheet(
                                         fontSize = 13.sp,
                                         modifier = Modifier.weight(1f)
                                     )
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        IconButton(
-                                            onClick = { onOpenQuestionEditor(q) },
-                                            modifier = Modifier.size(26.dp)
-                                        ) {
-                                            Icon(Icons.Default.Edit, contentDescription = "Edit", tint = IndigoGlow, modifier = Modifier.size(14.dp))
-                                        }
-                                        IconButton(
-                                            onClick = { onDeleteQuestion(q.id) },
-                                            modifier = Modifier.size(26.dp)
-                                        ) {
-                                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = RoseRuby, modifier = Modifier.size(14.dp))
+                                    if (!isReadOnly) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            IconButton(
+                                                onClick = { onOpenQuestionEditor(q) },
+                                                modifier = Modifier.size(26.dp)
+                                            ) {
+                                                Icon(Icons.Default.Edit, contentDescription = "Edit", tint = IndigoGlow, modifier = Modifier.size(14.dp))
+                                            }
+                                            IconButton(
+                                                onClick = { onDeleteQuestion(q.id) },
+                                                modifier = Modifier.size(26.dp)
+                                            ) {
+                                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = RoseRuby, modifier = Modifier.size(14.dp))
+                                            }
                                         }
                                     }
                                 }

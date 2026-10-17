@@ -28,6 +28,7 @@ data class ImportedBook(
     val visibility: String,
     val tagsCsv: String,
     val coverPreset: String,
+    val coverImage: String? = null,
     val pages: List<PageEntity>,
     val canvases: List<CanvasEntity>,
     val questions: List<QuestionEntity>
@@ -93,6 +94,7 @@ object ZipImporter {
         val desc = meta.get("description")?.takeIf { it.isJsonPrimitive }?.asString ?: "Imported from agent package"
         val visibility = meta.get("visibility")?.takeIf { it.isJsonPrimitive }?.asString ?: "public"
         val preset = meta.get("coverPreset")?.takeIf { it.isJsonPrimitive }?.asString ?: "celestial"
+        val coverImage = meta.get("coverImage")?.takeIf { it.isJsonPrimitive }?.asString
         val tagsCsv = meta.get("tags")?.takeIf { it.isJsonArray }
             ?.asJsonArray?.mapNotNull { it.takeIf { e -> e.isJsonPrimitive }?.asString }
             ?.filter { it.isNotBlank() }?.joinToString(",")?.ifEmpty { null } ?: "Imported"
@@ -172,6 +174,7 @@ object ZipImporter {
                 ownerSub = userId ?: "*",
                 visibility = visibility,
                 coverPreset = preset,
+                coverImage = coverImage,
                 tagsCsv = tagsCsv,
                 updatedAt = System.currentTimeMillis()
             )
@@ -180,7 +183,18 @@ object ZipImporter {
         if (canvasEntities.isNotEmpty()) db.dao().upsertCanvases(canvasEntities)
         if (questionEntities.isNotEmpty()) db.dao().upsertQuestions(questionEntities)
 
-        return ImportedBook(newBookId, title, desc, visibility, tagsCsv, preset, pageEntities, canvasEntities, questionEntities)
+        return ImportedBook(
+            id = newBookId,
+            title = title,
+            description = desc,
+            visibility = visibility,
+            tagsCsv = tagsCsv,
+            coverPreset = preset,
+            coverImage = coverImage,
+            pages = pageEntities,
+            canvases = canvasEntities,
+            questions = questionEntities
+        )
     }
 
     private suspend fun importSingleJson(text: String, db: EsperDatabase, userId: String?): ImportedBook {
@@ -197,6 +211,7 @@ object ZipImporter {
         val desc = root.get("description")?.takeIf { it.isJsonPrimitive }?.asString ?: "Imported from file"
         val visibility = root.get("visibility")?.takeIf { it.isJsonPrimitive }?.asString ?: "public"
         val preset = root.get("coverPreset")?.takeIf { it.isJsonPrimitive }?.asString ?: "celestial"
+        val coverImage = root.get("coverImage")?.takeIf { it.isJsonPrimitive }?.asString
         val tagsCsv = root.get("tags")?.takeIf { it.isJsonArray }
             ?.asJsonArray?.mapNotNull { it.takeIf { e -> e.isJsonPrimitive }?.asString }
             ?.filter { it.isNotBlank() }?.joinToString(",")?.ifEmpty { null } ?: "Imported"
@@ -259,6 +274,7 @@ object ZipImporter {
                 ownerSub = userId ?: "*",
                 visibility = visibility,
                 coverPreset = preset,
+                coverImage = coverImage,
                 tagsCsv = tagsCsv,
                 updatedAt = System.currentTimeMillis()
             )
@@ -267,7 +283,18 @@ object ZipImporter {
         if (canvasEntities.isNotEmpty()) db.dao().upsertCanvases(canvasEntities)
         if (questionEntities.isNotEmpty()) db.dao().upsertQuestions(questionEntities)
 
-        return ImportedBook(newBookId, title, desc, visibility, tagsCsv, preset, pageEntities, canvasEntities, questionEntities)
+        return ImportedBook(
+            id = newBookId,
+            title = title,
+            description = desc,
+            visibility = visibility,
+            tagsCsv = tagsCsv,
+            coverPreset = preset,
+            coverImage = coverImage,
+            pages = pageEntities,
+            canvases = canvasEntities,
+            questions = questionEntities
+        )
     }
 
     private fun stripNumericPrefix(name: String): String =

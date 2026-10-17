@@ -33,6 +33,8 @@ import com.esper.android.data.model.PageEntity
 import com.esper.android.data.model.QuestionEntity
 import com.esper.android.ui.canvas.DrawingCanvasView
 import com.esper.android.ui.components.EditorSkeleton
+import com.esper.android.ui.components.LocalReadOnlyMode
+import com.esper.android.ui.components.OfflineNoticeBanner
 import com.esper.android.ui.components.SimulationSkeleton
 import com.esper.android.ui.components.YouTubePlayer
 import com.esper.android.ui.components.YouTubePlayerHostState
@@ -72,6 +74,7 @@ fun WorkspaceScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val isReadOnly = LocalReadOnlyMode.current
     var splitRatio by remember { mutableFloatStateOf(0.42f) }
     var viewportMode by remember { mutableStateOf(ViewportMode.SPLIT) }
     var isDraggingSplitter by remember { mutableStateOf(false) }
@@ -139,7 +142,11 @@ fun WorkspaceScreen(
     ) {
         Scaffold(
             topBar = {
-                TopAppBar(
+                Column {
+                    if (isReadOnly) {
+                        OfflineNoticeBanner()
+                    }
+                    TopAppBar(
                     title = {
                         Column {
                             Text(notebookTitle, style = MaterialTheme.typography.titleSmall, maxLines = 1, color = TextPrimary)
@@ -176,8 +183,10 @@ fun WorkspaceScreen(
                         IconButton(onClick = onOpenTabsScreen) {
                             Icon(Icons.Default.Layers, contentDescription = "Tabs Screen", tint = ElectricViolet)
                         }
-                        IconButton(onClick = onOpenConfigureBook) {
-                            Icon(Icons.Default.Tune, contentDescription = "Configure Book", tint = IndigoGlow)
+                        if (!isReadOnly) {
+                            IconButton(onClick = onOpenConfigureBook) {
+                                Icon(Icons.Default.Tune, contentDescription = "Configure Book", tint = IndigoGlow)
+                            }
                         }
                         if (hasAttachment) {
                             IconButton(onClick = {
@@ -197,7 +206,8 @@ fun WorkspaceScreen(
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
-                )
+                    )
+                }
             }
         ) { innerPadding ->
             BoxWithConstraints(
@@ -227,7 +237,8 @@ fun WorkspaceScreen(
                                     },
                                     onTimestampClicked = { seconds ->
                                         Toast.makeText(context, "Timestamp: ${seconds}s", Toast.LENGTH_SHORT).show()
-                                    }
+                                    },
+                                    readOnly = isReadOnly
                                 )
                                 }
                             }
@@ -296,7 +307,7 @@ fun WorkspaceScreen(
                                         .padding(10.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    if (attachedCanvas?.kind == "html") {
+                                    if (attachedCanvas?.kind == "html" && !isReadOnly) {
                                         Surface(
                                             shape = CircleShape,
                                             color = Color.Black.copy(alpha = 0.75f),
@@ -312,17 +323,19 @@ fun WorkspaceScreen(
                                         }
                                     }
 
-                                    Surface(
-                                        shape = CircleShape,
-                                        color = Color.Black.copy(alpha = 0.75f),
-                                        border = BorderStroke(1.dp, BorderSlate),
-                                        shadowElevation = 6.dp
-                                    ) {
-                                        IconButton(
-                                            onClick = { attachedCanvas?.let { onDeleteCanvas(it.id) } },
-                                            modifier = Modifier.size(34.dp)
+                                    if (!isReadOnly) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.Black.copy(alpha = 0.75f),
+                                            border = BorderStroke(1.dp, BorderSlate),
+                                            shadowElevation = 6.dp
                                         ) {
-                                            Icon(Icons.Default.Delete, contentDescription = "Delete Attachment", tint = RoseRuby, modifier = Modifier.size(16.dp))
+                                            IconButton(
+                                                onClick = { attachedCanvas?.let { onDeleteCanvas(it.id) } },
+                                                modifier = Modifier.size(34.dp)
+                                            ) {
+                                                Icon(Icons.Default.Delete, contentDescription = "Delete Attachment", tint = RoseRuby, modifier = Modifier.size(16.dp))
+                                            }
                                         }
                                     }
                                 }
@@ -385,7 +398,8 @@ fun WorkspaceScreen(
                                                     "if (window.seekTo) { window.seekTo($seconds); }",
                                                     null
                                                 )
-                                            }
+                                            },
+                                            readOnly = isReadOnly
                                         )
                                         }
                                     }

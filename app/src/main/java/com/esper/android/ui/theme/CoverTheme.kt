@@ -1,6 +1,17 @@
 package com.esper.android.ui.theme
 
+import android.net.Uri
 import androidx.compose.ui.graphics.Color
+import coil.ImageLoader
+import coil.decode.DataSource
+import coil.decode.ImageSource
+import coil.fetch.FetchResult
+import coil.fetch.Fetcher
+import coil.fetch.SourceResult
+import coil.request.Options
+import okio.Buffer
+import java.io.ByteArrayOutputStream
+import java.util.Base64
 
 data class PresetCoverMeta(
     val id: String,
@@ -285,7 +296,158 @@ object CoverThemeEngine {
     )
 
     fun getTheme(coverPreset: String?, coverImageUrl: String? = null): BookCoverTheme {
-        return PRESETS.find { it.id.equals(coverPreset, ignoreCase = true) }?.theme
-            ?: PRESETS[0].theme
+        val found = PRESETS.find { it.id.equals(coverPreset, ignoreCase = true) }
+        if (found != null) return found.theme
+
+        if (!coverImageUrl.isNullOrBlank()) {
+            val hash = kotlin.math.abs(coverImageUrl.hashCode())
+            val basePresets = listOf("celestial", "quantum", "solar", "midnight", "nebula", "crimson")
+            val selectedId = basePresets[hash % basePresets.size]
+            return PRESETS.find { it.id == selectedId }?.theme ?: PRESETS[0].theme
+        }
+
+        return PRESETS[0].theme
+    }
+}
+
+/**
+ * Normalizes any of the four Esper cover formats into a model Coil can render:
+ *  1. Base64 Data URI (`data:image/svg+xml;base64,...`, or a bare `PHN2...` string)
+ *  2. URL-encoded / UTF-8 Data URI (`data:image/svg+xml;utf8,%3Csvg...`)
+ *  3. Raw SVG markup (`<svg ...>` / `<?xml ...>`)
+ *  4. Remote HTTPS CDN URL (`https://ik.imagekit.io/...`)
+ *
+ * Coil has no fetcher for `data:` URIs or raw XML strings, so those are decoded
+ * to a UTF-8 [ByteArray] (rendered by the globally registered SvgDecoder).
+ * Remote URLs are returned as-is (Coil's default network fetcher handles them).
+ */
+object CoverImageHelper {
+
+    fun resolveCoverModel(raw: String?): Any? {
+        if (raw.isNullOrBlank()) return null
+        val trimmed = raw.trim()
+
+        if (trimmed.startsWith("https://", ignoreCase = true) ||
+            trimmed.startsWith("http://", ignoreCase = true)
+        ) {
+            return trimmed
+        }
+
+        if (trimmed.startsWith("<svg", ignoreCase = true) ||
+            trimmed.startsWith("<?xml", ignoreCase = true)
+        ) {
+            return trimmed.toByteArray(Charsets.UTF_8)
+        }
+
+        if (trimmed.startsWith("data:", ignoreCase = true)) {
+            return decodeDataUriToBytes(trimmed)
+        }
+
+        if (trimmed.startsWith("PHN2")) {
+            return decodeBase64(trimmed)
+        }
+
+        if (trimmed.contains("<svg", ignoreCase = true)) {
+            return trimmed.toByteArray(Charsets.UTF_8)
+        }
+
+        return null
+    }
+
+    fun decodeDataUriToBytes(dataUri: String): ByteArray? {
+        val commaIdx = dataUri.indexOf(',')
+        if (commaIdx == -1) return null
+        val meta = dataUri.substring(0, commaIdx)
+        val payload = dataUri.substring(commaIdx + 1)
+        val isBase64 = meta.contains(";base64", ignoreCase = true)
+
+        return if (isBase64) {
+            val clean = payload.replace("\n", "").replace("\r", "").replace(" ", "").trim()
+            decodeBase64(clean)
+        } else {
+            val decoded = percentDecode(payload)
+            decoded.toByteArray(Charsets.UTF_8)
+        }
+    }
+
+    internal fun decodeBase64(input: String): ByteArray? {
+        val clean = input.replace("\n", "").replace("\r", "").replace(" ", "").trim()
+        return try {
+            Base64.getDecoder().decode(clean)
+        } catch (_: Exception) {
+            try {
+                Base64.getMimeDecoder().decode(clean)
+            } catch (_: Exception) {
+                try {
+                    android.util.Base64.decode(clean, android.util.Base64.DEFAULT)
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        }
+    }
+
+    internal fun percentDecode(input: String): String {
+        if (!input.contains('%')) return input
+        val sb = StringBuilder(input.length)
+        var i = 0
+        val bytes = ByteArrayOutputStream()
+        while (i < input.length) {
+            val c = input[i]
+            if (c == '%' && i + 2 < input.length) {
+                val hex = input.substring(i + 1, i + 3)
+                val byteVal = hex.toIntOrNull(16)
+                if (byteVal != null) {
+                    bytes.write(byteVal)
+                    i += 3
+                    continue
+                }
+            }
+            if (bytes.size() > 0) {
+                sb.append(bytes.toString("UTF-8"))
+                bytes.reset()
+            }
+            sb.append(c)
+            i++
+        }
+        if (bytes.size() > 0) {
+            sb.append(bytes.toString("UTF-8"))
+        }
+        return sb.toString()
+    }
+}
+
+/**
+ * Coil fetcher for `data:` scheme URIs. Registered in [com.esper.android.EsperApplication]
+ * so that any code (including non-helper callers) can pass a data URI straight to Coil.
+ */
+class DataUriFetcher(
+    private val uriString: String,
+    private val options: Options
+) : Fetcher {
+
+    override suspend fun fetch(): FetchResult {
+        val bytes = CoverImageHelper.decodeDataUriToBytes(uriString)
+            ?: throw IllegalArgumentException("Could not decode data URI")
+
+        val commaIdx = uriString.indexOf(',')
+        val meta = if (commaIdx != -1) uriString.substring(0, commaIdx) else ""
+        val mimeType = meta.removePrefix("data:").substringBefore(';').trim().ifEmpty { "image/svg+xml" }
+
+        val buffer = Buffer().apply { write(bytes) }
+        return SourceResult(
+            source = ImageSource(buffer, options.context),
+            mimeType = mimeType,
+            dataSource = DataSource.MEMORY
+        )
+    }
+
+    class Factory : Fetcher.Factory<Uri> {
+        override fun create(data: Uri, options: Options, imageLoader: ImageLoader): Fetcher? {
+            if (data.scheme.equals("data", ignoreCase = true)) {
+                return DataUriFetcher(data.toString(), options)
+            }
+            return null
+        }
     }
 }

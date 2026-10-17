@@ -12,6 +12,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.model.QuestionEntity
+import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.lexical.ComposeLexicalEditor
 import com.esper.android.ui.theme.*
 
@@ -23,6 +24,7 @@ fun QuestionEditorScreen(
     onSaveAnswer: (questionId: String, answer: String) -> Unit,
     onUpdateTitle: (questionId: String, title: String) -> Unit
 ) {
+    val isReadOnly = LocalReadOnlyMode.current
     var title by remember(question.title) { mutableStateOf(question.title) }
     var answerContent by remember(question.answer) { mutableStateOf(question.answer) }
 
@@ -55,15 +57,17 @@ fun QuestionEditorScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        onSaveAnswer(question.id, answerContent)
-                        onNavigateBack()
-                    }) {
-                        Icon(
-                            Icons.Default.Check,
-                            contentDescription = "Save",
-                            tint = EmeraldSync
-                        )
+                    if (!isReadOnly) {
+                        IconButton(onClick = {
+                            onSaveAnswer(question.id, answerContent)
+                            onNavigateBack()
+                        }) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "Save",
+                                tint = EmeraldSync
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
@@ -84,9 +88,11 @@ fun QuestionEditorScreen(
                 OutlinedTextField(
                     value = title,
                     onValueChange = {
+                        if (isReadOnly) return@OutlinedTextField
                         title = it
                         onUpdateTitle(question.id, it)
                     },
+                    readOnly = isReadOnly,
                     label = { Text("Question Prompt / Title", color = TextMuted) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = TextPrimary,
@@ -108,7 +114,8 @@ fun QuestionEditorScreen(
                     onSaveAnswer(question.id, updated)
                 },
                 onTimestampClicked = {},
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                readOnly = isReadOnly
             )
         }
     }

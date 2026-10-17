@@ -9,7 +9,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,10 +31,14 @@ fun BookCard(
     onEdit: () -> Unit = {},
     onDelete: () -> Unit = {}
 ) {
+    val isReadOnly = LocalReadOnlyMode.current
     val theme = CoverThemeEngine.getTheme(notebook.coverPreset, notebook.coverImage)
     val gradient = theme.gradientColors
 
-    val hasCoverImage = !notebook.coverImage.isNullOrBlank()
+    val coverModel = remember(notebook.coverImage) {
+        CoverImageHelper.resolveCoverModel(notebook.coverImage)
+    }
+    var isImageLoaded by remember(coverModel) { mutableStateOf(false) }
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -51,22 +55,32 @@ fun BookCard(
                     .fillMaxWidth()
                     .aspectRatio(0.69f)
                     .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                    .background(if (!hasCoverImage) Brush.linearGradient(gradient) else Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
+                    .background(Brush.linearGradient(gradient))
             ) {
-                if (hasCoverImage) {
+                if (coverModel != null) {
                     AsyncImage(
-                        model = notebook.coverImage,
+                        model = coverModel,
                         contentDescription = notebook.title,
                         contentScale = ContentScale.Crop,
+                        onSuccess = { isImageLoaded = true },
+                        onError = { isImageLoaded = false },
                         modifier = Modifier.fillMaxSize()
                     )
+                    if (isImageLoaded) {
+                        // Ambient contrast vignette (matches web `bg-black/25`)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.22f))
+                        )
+                    }
                 }
 
                 // App-rendered book spine (subtle translucent, artwork stays full-bleed)
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
-                        .width(8.dp)
+                        .width(6.dp)
                         .background(theme.spineColor.copy(alpha = 0.55f))
                         .align(Alignment.CenterStart)
                 )
@@ -100,45 +114,47 @@ fun BookCard(
                         Spacer(modifier = Modifier.size(18.dp))
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = Color.Black.copy(alpha = 0.5f)
-                        ) {
-                            IconButton(
-                                onClick = onEdit,
-                                modifier = Modifier.size(28.dp)
+                    if (!isReadOnly) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = Color.Black.copy(alpha = 0.5f)
                             ) {
-                                Icon(
-                                    Icons.Default.Tune,
-                                    contentDescription = "Configure Book",
-                                    tint = Color.White.copy(alpha = 0.85f),
-                                    modifier = Modifier.size(15.dp)
-                                )
+                                IconButton(
+                                    onClick = onEdit,
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Tune,
+                                        contentDescription = "Configure Book",
+                                        tint = Color.White.copy(alpha = 0.85f),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
                             }
-                        }
 
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = Color.Black.copy(alpha = 0.5f)
-                        ) {
-                            IconButton(
-                                onClick = onDelete,
-                                modifier = Modifier.size(28.dp)
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = Color.Black.copy(alpha = 0.5f)
                             ) {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = "Delete",
-                                    tint = Color.White.copy(alpha = 0.85f),
-                                    modifier = Modifier.size(15.dp)
-                                )
+                                IconButton(
+                                    onClick = onDelete,
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Delete",
+                                        tint = Color.White.copy(alpha = 0.85f),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
                             }
                         }
                     }
                 }
 
-                // Only render title in the center if there is NO cover image
-                if (!hasCoverImage) {
+                // Render title while the cover is absent, loading, or errored
+                if (coverModel == null || !isImageLoaded) {
                     Text(
                         text = notebook.title,
                         color = TextPrimary,
