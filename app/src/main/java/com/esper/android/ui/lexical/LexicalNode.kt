@@ -43,6 +43,7 @@ data class LexicalListItemNode(
     override val key: String,
     val isOrdered: Boolean,
     val indexNumber: Int?,
+    val indentLevel: Int = 0, // 0 = root, 1 = 2/4 spaces, 2 = 4/8 spaces, etc.
     val isTask: Boolean = false,
     val isChecked: Boolean = false,
     val inlines: List<LexicalInlineNode>

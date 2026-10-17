@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.esper.android.ui.components.KaTeXMathView
+import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.theme.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -53,6 +54,7 @@ sealed interface LexicalAction {
     object AddQuote : LexicalAction
     object AddCodeBlock : LexicalAction
     object AddBulletList : LexicalAction
+    object AddNestedBulletList : LexicalAction
     object AddChecklist : LexicalAction
     object AddTable : LexicalAction
     object AddTimestamp : LexicalAction
@@ -64,7 +66,8 @@ fun ComposeLexicalEditor(
     initialMarkdown: String,
     onContentChanged: (String) -> Unit,
     onTimestampClicked: (Int) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    readOnly: Boolean = LocalReadOnlyMode.current
 ) {
     val coroutineScope = rememberCoroutineScope()
     var rawText by remember(initialMarkdown) { mutableStateOf(initialMarkdown) }
@@ -80,6 +83,7 @@ fun ComposeLexicalEditor(
     }
 
     fun commit(newText: String) {
+        if (readOnly) return
         rawText = newText
         blocks = LexicalParser.parseToLexicalAst(newText)
         debounceJob?.cancel()
@@ -95,9 +99,10 @@ fun ComposeLexicalEditor(
             .imePadding()
             .background(SpaceBlack)
     ) {
-        // Formatting Toolbar
+        // Formatting Toolbar (read-only: only the Native/Raw view toggle remains)
         LexicalToolbar(
             isRawMode = isRawEditMode,
+            readOnly = readOnly,
             onToggleMode = { isRawEditMode = !isRawEditMode },
             onAction = { action ->
                 val updated = applyAction(rawText, action)
@@ -123,9 +128,10 @@ fun ComposeLexicalEditor(
                 ) {
                     BasicTextField(
                         value = rawText,
-                        onValueChange = { commit(it) },
+                        onValueChange = { if (!readOnly) commit(it) },
+                        readOnly = readOnly,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            color = TextPrimary,
+                            color = if (readOnly) TextSecondary else TextPrimary,
                             lineHeight = 22.sp,
                             fontFamily = FontFamily.Monospace
                         ),
@@ -285,7 +291,15 @@ fun LexicalBlockRenderer(
         }
 
         is LexicalListItemNode -> {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            // Left padding based on nesting depth (20.dp per indent level)
+            val startPadding = (block.indentLevel * 20).dp
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = startPadding, top = 2.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.Top
+            ) {
                 if (block.isTask) {
                     Checkbox(
                         checked = block.isChecked,
@@ -294,25 +308,40 @@ fun LexicalBlockRenderer(
                             checkedColor = IndigoAccent,
                             uncheckedColor = TextMuted
                         ),
-                        modifier = Modifier.size(24.dp).padding(end = 4.dp)
+                        modifier = Modifier
+                            .size(24.dp)
+                            .padding(end = 4.dp)
                     )
                 } else if (block.isOrdered) {
+                    // Cycle format by nesting level: 1. -> a. -> i.
+                    val prefix = when (block.indentLevel % 3) {
+                        1 -> "${('a'.code + ((block.indexNumber ?: 1) - 1) % 26).toChar()}."
+                        2 -> "i."
+                        else -> "${block.indexNumber ?: 1}."
+                    }
                     Text(
-                        text = "${block.indexNumber ?: 1}.",
+                        text = prefix,
                         color = IndigoGlow,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
                         modifier = Modifier.width(24.dp)
                     )
                 } else {
+                    // Cycle bullet marker: • (disc) -> ◦ (circle) -> ▪ (square)
+                    val bulletChar = when (block.indentLevel % 3) {
+                        1 -> "◦"
+                        2 -> "▪"
+                        else -> "•"
+                    }
                     Text(
-                        text = "•",
-                        color = IndigoGlow,
-                        fontSize = 16.sp,
+                        text = bulletChar,
+                        color = if (block.indentLevel == 0) IndigoGlow else TextSecondary,
+                        fontSize = if (bulletChar == "▪") 11.sp else 16.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.width(18.dp)
                     )
                 }
+
                 LexicalInlineContent(
                     inlines = block.inlines,
                     baseFontSize = 14.sp,
@@ -474,7 +503,8 @@ fun LexicalInlineContent(
 fun LexicalToolbar(
     isRawMode: Boolean,
     onToggleMode: () -> Unit,
-    onAction: (LexicalAction) -> Unit
+    onAction: (LexicalAction) -> Unit,
+    readOnly: Boolean = false
 ) {
     Row(
         modifier = Modifier
@@ -502,21 +532,24 @@ fun LexicalToolbar(
             )
         )
 
-        ToolbarBtn(label = "H1", onClick = { onAction(LexicalAction.AddH1) })
-        ToolbarBtn(label = "H2", onClick = { onAction(LexicalAction.AddH2) })
-        ToolbarBtn(label = "B", fontWeight = FontWeight.Bold, onClick = { onAction(LexicalAction.AddBold) })
-        ToolbarBtn(label = "I", fontStyle = FontStyle.Italic, onClick = { onAction(LexicalAction.AddItalic) })
-        ToolbarBtn(label = "S", onClick = { onAction(LexicalAction.AddStrike) })
-        ToolbarBtn(label = "KaTeX $$", accent = AmberGlow, onClick = { onAction(LexicalAction.AddMathBlock) })
-        ToolbarBtn(label = "KaTeX $", accent = AmberGlow, onClick = { onAction(LexicalAction.AddInlineMath) })
-        ToolbarBtn(label = "Image", accent = EmeraldSync, onClick = { onAction(LexicalAction.AddImage) })
-        ToolbarBtn(label = "List", onClick = { onAction(LexicalAction.AddBulletList) })
-        ToolbarBtn(label = "Task", onClick = { onAction(LexicalAction.AddChecklist) })
-        ToolbarBtn(label = "Table", onClick = { onAction(LexicalAction.AddTable) })
-        ToolbarBtn(label = "Code", onClick = { onAction(LexicalAction.AddCodeBlock) })
-        ToolbarBtn(label = "> Quote", onClick = { onAction(LexicalAction.AddQuote) })
-        ToolbarBtn(label = "[00:15]", accent = IndigoGlow, onClick = { onAction(LexicalAction.AddTimestamp) })
-        ToolbarBtn(label = "---", onClick = { onAction(LexicalAction.AddDivider) })
+        if (!readOnly) {
+            ToolbarBtn(label = "H1", onClick = { onAction(LexicalAction.AddH1) })
+            ToolbarBtn(label = "H2", onClick = { onAction(LexicalAction.AddH2) })
+            ToolbarBtn(label = "B", fontWeight = FontWeight.Bold, onClick = { onAction(LexicalAction.AddBold) })
+            ToolbarBtn(label = "I", fontStyle = FontStyle.Italic, onClick = { onAction(LexicalAction.AddItalic) })
+            ToolbarBtn(label = "S", onClick = { onAction(LexicalAction.AddStrike) })
+            ToolbarBtn(label = "KaTeX $$", accent = AmberGlow, onClick = { onAction(LexicalAction.AddMathBlock) })
+            ToolbarBtn(label = "KaTeX $", accent = AmberGlow, onClick = { onAction(LexicalAction.AddInlineMath) })
+            ToolbarBtn(label = "Image", accent = EmeraldSync, onClick = { onAction(LexicalAction.AddImage) })
+            ToolbarBtn(label = "List", onClick = { onAction(LexicalAction.AddBulletList) })
+            ToolbarBtn(label = "Sub-list", accent = IndigoGlow, onClick = { onAction(LexicalAction.AddNestedBulletList) })
+            ToolbarBtn(label = "Task", onClick = { onAction(LexicalAction.AddChecklist) })
+            ToolbarBtn(label = "Table", onClick = { onAction(LexicalAction.AddTable) })
+            ToolbarBtn(label = "Code", onClick = { onAction(LexicalAction.AddCodeBlock) })
+            ToolbarBtn(label = "> Quote", onClick = { onAction(LexicalAction.AddQuote) })
+            ToolbarBtn(label = "[00:15]", accent = IndigoGlow, onClick = { onAction(LexicalAction.AddTimestamp) })
+            ToolbarBtn(label = "---", onClick = { onAction(LexicalAction.AddDivider) })
+        }
     }
 }
 
@@ -560,7 +593,8 @@ private fun applyAction(content: String, action: LexicalAction): String {
         LexicalAction.AddMathBlock -> "$content\n$$\n\\oint \\mathbf{B} \\cdot d\\mathbf{l} = \\mu_0 I_{\\text{enc}}\n$$\n"
         LexicalAction.AddInlineMath -> "$content \$E = mc^2\$"
         LexicalAction.AddImage -> "$content\n![Kepler Ellipse](https://images.unsplash.com/photo-1614728894747-a83421e2b9c9?w=800)\n"
-        LexicalAction.AddBulletList -> "$content\n- First observation\n- Second observation"
+        LexicalAction.AddBulletList -> "$content\n- Top-level item"
+        LexicalAction.AddNestedBulletList -> "$content\n  - Nested sub-item"
         LexicalAction.AddChecklist -> "$content\n- [ ] Unfinished task\n- [x] Verified item"
         LexicalAction.AddTable -> "$content\n| Parameter | Value | Unit |\n|---|---|---|\n| Semi-Major Axis (a) | 1.496e8 | km |\n| Eccentricity (e) | 0.0167 | - |\n"
         LexicalAction.AddCodeBlock -> "$content\n```python\ndef orbital_period(a, mu):\n    return 2 * math.pi * math.sqrt(a**3 / mu)\n```"

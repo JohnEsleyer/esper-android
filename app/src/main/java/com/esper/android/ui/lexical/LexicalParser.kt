@@ -18,6 +18,11 @@ object LexicalParser {
             val line = lines[i]
             val trimmed = line.trim()
 
+            // Calculate indentation level (supports both 2-space and 4-space markdown indents)
+            val leadingSpaces = line.takeWhile { it == ' ' || it == '\t' }
+                .fold(0) { count, char -> if (char == '\t') count + 4 else count + 1 }
+            val indentLevel = (leadingSpaces / 2).coerceIn(0, 6)
+
             // 1. Math Block: $$
             if (trimmed.startsWith("$$")) {
                 val mathLines = mutableListOf<String>()
@@ -110,7 +115,7 @@ object LexicalParser {
                 continue
             }
 
-            // 7. Checkbox Tasks: - [ ] or - [x]
+            // 7. Checkbox Tasks: - [ ] or - [x] (preserving indentation)
             if (trimmed.startsWith("- [ ] ") || trimmed.startsWith("- [x] ")) {
                 val isChecked = trimmed.startsWith("- [x] ")
                 val content = trimmed.substring(6).trim()
@@ -119,6 +124,7 @@ object LexicalParser {
                         key = UUID.randomUUID().toString(),
                         isOrdered = false,
                         indexNumber = null,
+                        indentLevel = indentLevel,
                         isTask = true,
                         isChecked = isChecked,
                         inlines = parseInlineNodes(content)
@@ -128,13 +134,14 @@ object LexicalParser {
                 continue
             }
 
-            // 8. Bullet Lists: - or *
-            if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+            // 8. Bullet Lists: - , * , or + (preserving indentation)
+            if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("+ ")) {
                 blocks.add(
                     LexicalListItemNode(
                         key = UUID.randomUUID().toString(),
                         isOrdered = false,
                         indexNumber = null,
+                        indentLevel = indentLevel,
                         inlines = parseInlineNodes(trimmed.substring(2).trim())
                     )
                 )
@@ -142,7 +149,7 @@ object LexicalParser {
                 continue
             }
 
-            // 9. Ordered Lists: 1. 2. etc
+            // 9. Ordered Lists: 1. , 2. etc (preserving indentation)
             val orderedMatch = Regex("^(\\d+)\\.\\s+(.*)$").matchEntire(trimmed)
             if (orderedMatch != null) {
                 val num = orderedMatch.groupValues[1].toIntOrNull() ?: 1
@@ -152,6 +159,7 @@ object LexicalParser {
                         key = UUID.randomUUID().toString(),
                         isOrdered = true,
                         indexNumber = num,
+                        indentLevel = indentLevel,
                         inlines = parseInlineNodes(content)
                     )
                 )
