@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.model.PageEntity
+import com.esper.android.ui.components.ConfirmDeleteDialog
 import com.esper.android.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -32,6 +33,7 @@ fun ChapterBottomSheet(
     var showCreateDialog by remember { mutableStateOf(false) }
     var newPageTitle by remember { mutableStateOf("") }
     var selectedParentId by remember { mutableStateOf<String?>(null) }
+    var pageToDelete by remember { mutableStateOf<PageEntity?>(null) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -100,7 +102,7 @@ fun ChapterBottomSheet(
                                     )
                                 }
                                 IconButton(
-                                    onClick = { onDeletePage(page.id) },
+                                    onClick = { pageToDelete = page },
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(
@@ -153,6 +155,18 @@ fun ChapterBottomSheet(
                 }
             },
             containerColor = CosmicSlate
+        )
+    }
+
+    pageToDelete?.let { page ->
+        ConfirmDeleteDialog(
+            title = "Delete Chapter",
+            message = "Are you sure you want to delete \u201C${page.title}\u201D and any subchapters?",
+            onConfirm = {
+                onDeletePage(page.id)
+                pageToDelete = null
+            },
+            onDismiss = { pageToDelete = null }
         )
     }
 }

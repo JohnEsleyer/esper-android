@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.model.CanvasEntity
+import com.esper.android.ui.components.ConfirmDeleteDialog
 import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.theme.*
 
@@ -34,6 +35,7 @@ fun AttachmentsBottomSheet(
     var title by remember { mutableStateOf("") }
     var kind by remember { mutableStateOf("html") }
     var payload by remember { mutableStateOf("") }
+    var canvasToDelete by remember { mutableStateOf<CanvasEntity?>(null) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -105,7 +107,7 @@ fun AttachmentsBottomSheet(
                                     }
                                     if (!isReadOnly) {
                                         IconButton(
-                                            onClick = { onDeleteAttachment(canvas.id) },
+                                            onClick = { canvasToDelete = canvas },
                                             modifier = Modifier.size(24.dp)
                                         ) {
                                             Icon(
@@ -202,6 +204,18 @@ fun AttachmentsBottomSheet(
                 TextButton(onClick = { showDialog = false }) { Text("Cancel", color = TextSecondary) }
             },
             containerColor = CosmicSlate
+        )
+    }
+
+    canvasToDelete?.let { canvas ->
+        ConfirmDeleteDialog(
+            title = "Delete Companion Visual",
+            message = "Are you sure you want to delete \u201C${canvas.title}\u201D?",
+            onConfirm = {
+                onDeleteAttachment(canvas.id)
+                canvasToDelete = null
+            },
+            onDismiss = { canvasToDelete = null }
         )
     }
 }

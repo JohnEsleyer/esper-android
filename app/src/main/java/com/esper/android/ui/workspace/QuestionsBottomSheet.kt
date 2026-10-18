@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.model.QuestionEntity
+import com.esper.android.ui.components.ConfirmDeleteDialog
 import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.theme.*
 
@@ -32,6 +33,7 @@ fun QuestionsBottomSheet(
     val isReadOnly = LocalReadOnlyMode.current
     var showCreateDialog by remember { mutableStateOf(false) }
     var newTitle by remember { mutableStateOf("") }
+    var questionToDelete by remember { mutableStateOf<QuestionEntity?>(null) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -110,7 +112,7 @@ fun QuestionsBottomSheet(
                                                 Icon(Icons.Default.Edit, contentDescription = "Edit", tint = IndigoGlow, modifier = Modifier.size(14.dp))
                                             }
                                             IconButton(
-                                                onClick = { onDeleteQuestion(q.id) },
+                                                onClick = { questionToDelete = q },
                                                 modifier = Modifier.size(26.dp)
                                             ) {
                                                 Icon(Icons.Default.Delete, contentDescription = "Delete", tint = RoseRuby, modifier = Modifier.size(14.dp))
@@ -171,6 +173,18 @@ fun QuestionsBottomSheet(
                 TextButton(onClick = { showCreateDialog = false }) { Text("Cancel", color = TextSecondary) }
             },
             containerColor = CosmicSlate
+        )
+    }
+
+    questionToDelete?.let { q ->
+        ConfirmDeleteDialog(
+            title = "Delete Question",
+            message = "Are you sure you want to delete \u201C${q.title}\u201D?",
+            onConfirm = {
+                onDeleteQuestion(q.id)
+                questionToDelete = null
+            },
+            onDismiss = { questionToDelete = null }
         )
     }
 }

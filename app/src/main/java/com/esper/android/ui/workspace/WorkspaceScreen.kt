@@ -32,6 +32,7 @@ import com.esper.android.data.model.CanvasEntity
 import com.esper.android.data.model.PageEntity
 import com.esper.android.data.model.QuestionEntity
 import com.esper.android.ui.canvas.DrawingCanvasView
+import com.esper.android.ui.components.ConfirmDeleteDialog
 import com.esper.android.ui.components.EditorSkeleton
 import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.components.OfflineNoticeBanner
@@ -85,6 +86,7 @@ fun WorkspaceScreen(
     var isQuestionsSheetOpen by remember { mutableStateOf(false) }
     var isAttachmentsSheetOpen by remember { mutableStateOf(false) }
     var showHtmlCodeEditor by remember { mutableStateOf(false) }
+    var showDeleteCanvasConfirm by remember { mutableStateOf(false) }
 
     val activePage = pages.getOrNull(activePageIndex)
     val youtubeHostState = remember { YouTubePlayerHostState() }
@@ -331,7 +333,7 @@ fun WorkspaceScreen(
                                             shadowElevation = 6.dp
                                         ) {
                                             IconButton(
-                                                onClick = { attachedCanvas?.let { onDeleteCanvas(it.id) } },
+                                                onClick = { showDeleteCanvasConfirm = true },
                                                 modifier = Modifier.size(34.dp)
                                             ) {
                                                 Icon(Icons.Default.Delete, contentDescription = "Delete Attachment", tint = RoseRuby, modifier = Modifier.size(16.dp))
@@ -461,6 +463,18 @@ fun WorkspaceScreen(
                             showHtmlCodeEditor = false
                         },
                         onDismiss = { showHtmlCodeEditor = false }
+                    )
+                }
+
+                if (showDeleteCanvasConfirm && attachedCanvas != null) {
+                    ConfirmDeleteDialog(
+                        title = "Delete Companion Visual",
+                        message = "Are you sure you want to delete \u201C${attachedCanvas.title}\u201D?",
+                        onConfirm = {
+                            onDeleteCanvas(attachedCanvas.id)
+                            showDeleteCanvasConfirm = false
+                        },
+                        onDismiss = { showDeleteCanvasConfirm = false }
                     )
                 }
             }
