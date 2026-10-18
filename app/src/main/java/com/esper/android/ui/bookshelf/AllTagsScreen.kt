@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.model.NotebookEntity
+import com.esper.android.ui.components.ConfirmDeleteDialog
 import com.esper.android.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,6 +39,7 @@ fun AllTagsScreen(
     var newTagInput by remember { mutableStateOf("") }
     var editingTag by remember { mutableStateOf<String?>(null) }
     var renameBuffer by remember { mutableStateOf("") }
+    var tagToDelete by remember { mutableStateOf<String?>(null) }
 
     val tagCounts = remember(allTags, notebooks) {
         allTags.associateWith { tag ->
@@ -236,7 +238,7 @@ fun AllTagsScreen(
                                         Icon(Icons.Default.Edit, contentDescription = "Rename", tint = TextMuted, modifier = Modifier.size(14.dp))
                                     }
                                     IconButton(
-                                        onClick = { onDeleteTag(tag) },
+                                        onClick = { tagToDelete = tag },
                                         modifier = Modifier.size(30.dp)
                                     ) {
                                         Icon(Icons.Default.Delete, contentDescription = "Delete", tint = RoseRuby, modifier = Modifier.size(14.dp))
@@ -248,5 +250,17 @@ fun AllTagsScreen(
                 }
             }
         }
+    }
+
+    tagToDelete?.let { tag ->
+        ConfirmDeleteDialog(
+            title = "Delete Tag",
+            message = "Are you sure you want to delete the tag \u201C$tag\u201D?",
+            onConfirm = {
+                onDeleteTag(tag)
+                tagToDelete = null
+            },
+            onDismiss = { tagToDelete = null }
+        )
     }
 }

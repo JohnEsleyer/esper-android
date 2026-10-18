@@ -4,7 +4,7 @@
 > Android client needs to know about the web + backend repo. If you change
 > main-repo code that alters anything described here, update this file in the
 > same change (see `docs/contributing.md`).
-> Last verified: 2026-10-24. Covers post-encryption-removal state + SVG cover contract.
+> Last verified: 2026-10-18. Covers post-encryption-removal state + SVG cover contract + per-user journal id.
 
 ## Identity
 - Repo `022-esper`: React 19 SPA (`src/`, Cloudflare Pages) + Rust Axum API (`server/`, VPS via Skiff) + SurrealDB v3.x (`surrealkv`). API origin `https://esper-api.johnesleyer.com`, local `http://127.0.0.1:8080`.
@@ -32,7 +32,7 @@
 ## Web sync semantics (relevant to Android parity)
 - Keystroke path = surgical PATCH (never full PUT while typing — server PUT deletes+re-UPSERTs children, so stale full writes wipe concurrent edits). Full PUT only for structural/metadata changes.
 - Initial load resolves notes+profile+shelves together before dismissing skeleton; banner shows only when `member_type === 'visitor'` explicitly.
-- Journal = single book id `esper-journal`, restricted visibility.
+- Journal = per-user book id `esper-journal-<uid>` (`journalDocIdFor(uid)` in `src/App.jsx`), restricted visibility. Legacy shared id `esper-journal` is hidden on web (id-prefix filter) and adopted at most once into the per-user id. Android parity: `journalDocIdFor()` in `MainActivity.kt` + one-time Room migration.
 
 ## Web frontend map (`src/`)
 - `App.jsx` (state, sync, tabs/shelves/tags), `components/WorkspaceView.jsx`, `components/MarkdownEditor.jsx` (Lexical + Prism highlight + per-block copy buttons), `components/CodeEditor.jsx`, drawers/modals in `components/*/`, `services/api.js` (fetch/save/patch, guest-token via `sessionStorage`), `services/firebase.js` (Google popup sign-in), `services/bookImporter.js` (ZIP/`.esper` import), `services/zipExport.js`, `constants/presets.js` (API base resolution, `normalizeDoc`, ID helpers).

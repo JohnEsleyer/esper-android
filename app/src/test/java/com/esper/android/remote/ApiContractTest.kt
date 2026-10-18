@@ -4,6 +4,7 @@ import com.esper.android.data.remote.MeLimits
 import com.esper.android.data.remote.MeResponse
 import com.esper.android.data.remote.MeUsage
 import com.esper.android.deriveChapterTitle
+import com.esper.android.journalDocIdFor
 import com.google.gson.Gson
 import org.junit.Assert.*
 import org.junit.Test
@@ -53,5 +54,15 @@ class ApiContractTest {
         assertEquals("Item", deriveChapterTitle("> Item"))
         assertEquals("Item", deriveChapterTitle("- Item"))
         assertTrue(deriveChapterTitle("# " + "x".repeat(200)).length <= 100)
+    }
+
+    @Test
+    fun `journal doc id is scoped per signed-in uid`() {
+        assertEquals("esper-journal-uid123", journalDocIdFor("uid123"))
+    }
+
+    @Test
+    fun `journal doc id falls back to legacy shared id when signed out`() {
+        assertEquals("esper-journal", journalDocIdFor(null))
     }
 }

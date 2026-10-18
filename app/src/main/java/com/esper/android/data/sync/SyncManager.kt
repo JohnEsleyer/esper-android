@@ -46,7 +46,7 @@ class SyncManager(
         // Step A: Purge local notebooks that were deleted on web
         val localNotebooks = db.dao().getAllNotebooksList()
         localNotebooks.forEach { local ->
-            if (local.id != "esper-journal" && !remoteIds.contains(local.id)) {
+            if (!local.id.startsWith("esper-journal") && !remoteIds.contains(local.id)) {
                 db.dao().deleteNotebookCascade(local.id)
             }
         }

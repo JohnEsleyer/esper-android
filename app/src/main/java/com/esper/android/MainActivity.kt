@@ -131,17 +131,46 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    /** Upserts a whole notebook on the server: PUT, falling back to POST-create on 404. */
+    private suspend fun pushFullBook(docId: String) {
+        val details = db.dao().getNotebookDetails(docId) ?: return
+        val payload = fullBookPayload(details)
+        try {
+            api.updateNote(docId, payload)
+        } catch (e: Exception) {
+            if (e is retrofit2.HttpException && e.code() == 404) {
+                api.createNote(payload + ("id" to docId))
+            } else throw e
+        }
+    }
+
     /**
      * Replays one queued op against the server using current Room content.
      * Returns true when the op is resolved (sent, or provably obsolete).
-     * 404 on update/create means the server side is gone → resolve.
+     * 404 on update/create heals: re-create the page or push the whole book.
      */
     private suspend fun replayOp(op: SyncOp): Boolean {
         return try {
             when (op) {
                 is SyncOp.PatchPage -> {
                     val page = db.dao().getPageById(op.pageId) ?: return true
-                    api.patchPage(op.docId, op.pageId, mapOf("notes" to page.notes, "title" to page.title))
+                    try {
+                        api.patchPage(op.docId, op.pageId, mapOf("notes" to page.notes, "title" to page.title))
+                    } catch (e: Exception) {
+                        if (e is retrofit2.HttpException && e.code() == 404) {
+                            // Page vanished server-side: re-create it.
+                            try {
+                                api.createPage(
+                                    op.docId,
+                                    mapOf("id" to page.id, "title" to page.title, "notes" to page.notes, "parentId" to page.parentId)
+                                )
+                            } catch (createErr: Exception) {
+                                if (createErr is retrofit2.HttpException && createErr.code() == 404) {
+                                    pushFullBook(op.docId)
+                                } else throw createErr
+                            }
+                        } else throw e
+                    }
                 }
                 is SyncOp.CreatePage -> {
                     val page = db.dao().getPageById(op.pageId) ?: return true
@@ -153,20 +182,12 @@ class MainActivity : ComponentActivity() {
                     } catch (e: Exception) {
                         if (e is retrofit2.HttpException && e.code() == 404) {
                             // Notebook itself is gone server-side: re-PUT the whole book.
-                            val details = db.dao().getNotebookDetails(op.docId) ?: return true
-                            api.updateNote(op.docId, fullBookPayload(details))
+                            pushFullBook(op.docId)
                         } else throw e
                     }
                 }
                 is SyncOp.FullBook -> {
-                    val details = db.dao().getNotebookDetails(op.docId) ?: return true
-                    try {
-                        api.updateNote(op.docId, fullBookPayload(details))
-                    } catch (e: Exception) {
-                        if (e is retrofit2.HttpException && e.code() == 404) {
-                            api.createNote(fullBookPayload(details) + ("id" to op.docId))
-                        } else throw e
-                    }
+                    pushFullBook(op.docId)
                 }
                 is SyncOp.DeletePage -> {
                     try {
@@ -184,7 +205,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
             true
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w("EsperSync", "replayOp FAILED for $op", e)
             false
         }
     }
@@ -211,6 +233,10 @@ class MainActivity : ComponentActivity() {
                 var recentPageItems by remember { mutableStateOf<List<RecentPageItem>>(emptyList()) }
                 var currentUser by remember { mutableStateOf<FirebaseUser?>(auth.currentUser) }
                 var isOfflineMode by remember { mutableStateOf(false) }
+
+                // Web-parity journal id: per-user record "esper-journal-<uid>"
+                // when signed in; the legacy shared id in offline/guest mode.
+                val currentJournalId = remember(currentUser?.uid) { journalDocIdFor(currentUser?.uid) }
 
                 // Single source of truth for connectivity-driven read-only mode:
                 // offline gateway mode OR no validated network => whole app is read-only.
@@ -397,40 +423,62 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val allTags = remember(notebooks, customTags) {
-                    val extracted = notebooks.filter { it.id != "esper-journal" }.flatMap { it.tagsCsv.split(",") }
+                    val extracted = notebooks.filter { !it.id.startsWith("esper-journal") }.flatMap { it.tagsCsv.split(",") }
                         .map { it.trim() }
                         .filter { it.isNotEmpty() }
                     listOf("All") + (customTags + extracted).distinct()
                 }
 
-                LaunchedEffect(Unit) {
-                    coroutineScope.launch {
-                        // Single-book journal seed (deterministic id shared with web).
-                        val existingJournal = db.dao().getNotebookById("esper-journal")
-                        if (existingJournal == null) {
-                            val dateStr = try {
-                                java.text.SimpleDateFormat("EEE, MMM d", java.util.Locale.getDefault()).format(java.util.Date())
-                            } catch (_: Exception) { "Today" }
-                            db.dao().upsertNotebook(
-                                NotebookEntity(
-                                    id = "esper-journal",
-                                    title = "Personal Journal",
-                                    description = "Single book dumping ground for quick ideas",
-                                    ownerSub = "*",
-                                    visibility = "restricted",
-                                    tagsCsv = "Journal",
-                                    updatedAt = System.currentTimeMillis()
+                LaunchedEffect(currentUser?.uid) {
+                    coroutineScope.launch(Dispatchers.IO) {
+                        val journalId = journalDocIdFor(currentUser?.uid)
+                        if (db.dao().getNotebookById(journalId) == null) {
+                            val migrated = db.dao().getNotebookDetails("esper-journal")
+                            if (migrated != null) {
+                                // One-time migration: adopt the legacy shared
+                                // record under this user's private id so web
+                                // and Android edit the same server notebook.
+                                val legacyBook = migrated.notebook
+                                db.dao().upsertNotebook(
+                                    legacyBook.copy(id = journalId, updatedAt = System.currentTimeMillis())
                                 )
-                            )
-                            db.dao().upsertPage(
-                                PageEntity(
-                                    id = "jp-1",
-                                    notebookId = "esper-journal",
-                                    title = dateStr,
-                                    notes = "# $dateStr\n\nJot down ideas and quick thoughts here...",
-                                    position = 0
+                                db.dao().upsertPages(migrated.pages.map { it.copy(notebookId = journalId) })
+                                db.dao().upsertCanvases(migrated.canvases.map { it.copy(notebookId = journalId) })
+                                db.dao().upsertQuestions(migrated.questions.map { it.copy(notebookId = journalId) })
+                                db.dao().deleteNotebookCascade("esper-journal")
+                            } else {
+                                // Fresh journal seed (deterministic id shared with web).
+                                val dateStr = try {
+                                    java.text.SimpleDateFormat("EEE, MMM d", java.util.Locale.getDefault()).format(java.util.Date())
+                                } catch (_: Exception) { "Today" }
+                                db.dao().upsertNotebook(
+                                    NotebookEntity(
+                                        id = journalId,
+                                        title = "Personal Journal",
+                                        description = "Single book dumping ground for quick ideas",
+                                        ownerSub = currentUser?.uid ?: "*",
+                                        visibility = "restricted",
+                                        tagsCsv = "Journal",
+                                        updatedAt = System.currentTimeMillis()
+                                    )
                                 )
-                            )
+                                db.dao().upsertPage(
+                                    PageEntity(
+                                        id = "jp-1",
+                                        notebookId = journalId,
+                                        title = dateStr,
+                                        notes = "# $dateStr\n\nJot down ideas and quick thoughts here...",
+                                        position = 0
+                                    )
+                                )
+                            }
+                            val migrationOp = SyncOp.FullBook(journalId)
+                            writeQueue.markDirty(migrationOp)
+                            launch(Dispatchers.IO) {
+                                if (replayOp(migrationOp)) {
+                                    writeQueue.markClean(migrationOp)
+                                }
+                            }
                         }
                     }
                 }
@@ -542,15 +590,27 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                fun syncWithCloud() {
+                /** Quick = background-driven sync (SSE echo, etc.). Quiet syncs
+                 *  skip the toast so live edits never feel interrupted. */
+                fun syncWithCloud(quiet: Boolean = false) {
                     coroutineScope.launch(Dispatchers.IO) {
                         try {
                             val report = syncManager.sync(currentUser?.uid)
 
+                            // If journal exists locally but has not been created on
+                            // the server yet, push it.
+                            if (currentUser != null && !report.remoteIds.contains(currentJournalId)) {
+                                val journalDetails = db.dao().getNotebookDetails(currentJournalId)
+                                if (journalDetails != null) {
+                                    pushFullBook(currentJournalId)
+                                }
+                            }
+
                             // Step B: Reconcile open tabs
                             withContext(Dispatchers.Main) {
-                                openTabItems = openTabItems.filter { report.remoteIds.contains(it.notebook.id) || it.notebook.id == "esper-journal" }
-                                if (activeNotebookId != null && !report.remoteIds.contains(activeNotebookId) && activeNotebookId != "esper-journal") {
+                                val activeId = activeNotebookId
+                                openTabItems = openTabItems.filter { report.remoteIds.contains(it.notebook.id) || it.notebook.id.startsWith("esper-journal") }
+                                if (activeId != null && !report.remoteIds.contains(activeId) && !activeId.startsWith("esper-journal")) {
                                     val next = openTabItems.lastOrNull()
                                     activeNotebookId = next?.notebook?.id
                                     activePageIndex = (next?.pageNumber ?: 1) - 1
@@ -558,8 +618,14 @@ class MainActivity : ComponentActivity() {
                             }
 
                             withContext(Dispatchers.Main) {
-                                Toast.makeText(applicationContext, "Synced ${report.noteCount} notebooks", Toast.LENGTH_SHORT).show()
-                                lastSyncError = null
+                                if (quiet) {
+                                    // Record success without interrupting the
+                                    // user visually.
+                                    lastSyncError = null
+                                } else {
+                                    Toast.makeText(applicationContext, "Synced ${report.noteCount} notebooks", Toast.LENGTH_SHORT).show()
+                                    lastSyncError = null
+                                }
                             }
                             // Replay any writes that failed while offline, now that
                             // we know the server is reachable.
@@ -603,9 +669,12 @@ class MainActivity : ComponentActivity() {
                 // Real-time: long-lived SSE reader. Any broadcast data line
                 // triggers a background sync; reconnects with backoff.
                 // Derived from the effective base URL so local dev still works.
+                // Quiet: our own saves echo back as events; a full pull after
+                // every keystroke debounce would nag (and re-emit Room under
+                // the editor) — so these run toast-free.
                 LaunchedEffect(Unit) {
                     syncManager.watchEvents(this, RemoteClient.baseUrl(applicationContext)) {
-                        syncWithCloud()
+                        syncWithCloud(quiet = true)
                     }
                 }
 
@@ -640,7 +709,7 @@ class MainActivity : ComponentActivity() {
                     }
 
                     currentScreen == ActiveScreen.JOURNAL -> {
-                        val journalDetails by db.dao().observeNotebookDetails("esper-journal").collectAsState(initial = null)
+                        val journalDetails by db.dao().observeNotebookDetails(currentJournalId).collectAsState(initial = null)
                         val journalPages = remember(journalDetails) {
                             (journalDetails?.pages ?: emptyList()).sortedBy { it.position }
                         }
@@ -651,15 +720,12 @@ class MainActivity : ComponentActivity() {
                                 coroutineScope.launch {
                                     val derivedTitle = deriveChapterTitle(text)
                                     db.dao().updatePageNotesAndTitle(pageId, text, derivedTitle)
-                                    db.dao().updateNotebookUpdatedAt("esper-journal", System.currentTimeMillis())
-                                    val journalOp = SyncOp.PatchPage("esper-journal", pageId)
+                                    db.dao().updateNotebookUpdatedAt(currentJournalId, System.currentTimeMillis())
+                                    val journalOp = SyncOp.PatchPage(currentJournalId, pageId)
                                     writeQueue.markDirty(journalOp)
                                     launch(Dispatchers.IO) {
-                                        try {
-                                            api.patchPage("esper-journal", pageId, mapOf("notes" to text, "title" to derivedTitle))
+                                        if (replayOp(journalOp)) {
                                             writeQueue.markClean(journalOp)
-                                        } catch (e: Exception) {
-                                            Log.w("EsperSync", "journal patch failed for $pageId", e)
                                         }
                                     }
                                 }
@@ -671,27 +737,19 @@ class MainActivity : ComponentActivity() {
                                     db.dao().upsertPage(
                                         PageEntity(
                                             id = newPageId,
-                                            notebookId = "esper-journal",
+                                            notebookId = currentJournalId,
                                             title = dateTitle,
                                             notes = "# $dateTitle\n\n",
                                             position = journalPages.size
                                         )
                                     )
-                                    db.dao().updateNotebookUpdatedAt("esper-journal", System.currentTimeMillis())
-                                    val journalCreateOp = SyncOp.CreatePage("esper-journal", newPageId)
+                                    db.dao().updateNotebookUpdatedAt(currentJournalId, System.currentTimeMillis())
+                                    val journalCreateOp = SyncOp.CreatePage(currentJournalId, newPageId)
                                     writeQueue.markDirty(journalCreateOp)
                                     launch(Dispatchers.IO) {
-                                        try {
-                                            api.createPage(
-                                                "esper-journal",
-                                                mapOf(
-                                                    "id" to newPageId,
-                                                    "title" to dateTitle,
-                                                    "notes" to "# $dateTitle\n\n"
-                                                )
-                                            )
+                                        if (replayOp(journalCreateOp)) {
                                             writeQueue.markClean(journalCreateOp)
-                                        } catch (_: Exception) {}
+                                        }
                                     }
                                 }
                             },
@@ -699,13 +757,12 @@ class MainActivity : ComponentActivity() {
                                 if (isReadOnly) return@JournalScreen
                                 coroutineScope.launch {
                                     db.dao().deletePageAndChildren(pageId)
-                                    val delOp = SyncOp.DeletePage("esper-journal", pageId)
+                                    val delOp = SyncOp.DeletePage(currentJournalId, pageId)
                                     writeQueue.markDirty(delOp)
                                     launch(Dispatchers.IO) {
-                                        try {
-                                            api.deletePage("esper-journal", pageId)
+                                        if (replayOp(delOp)) {
                                             writeQueue.markClean(delOp)
-                                        } catch (_: Exception) {}
+                                        }
                                     }
                                 }
                             },
@@ -1337,6 +1394,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+/**
+ * Web parity (App.jsx journalDocIdFor): the journal is a per-user notebook
+ * scoped by Firebase uid so each account owns its record server-side.
+ * Offline/guest mode falls back to the legacy shared id.
+ */
+internal fun journalDocIdFor(uid: String?): String = uid?.let { "esper-journal-$it" } ?: "esper-journal"
 
 /**
  * Web parity (presets.extractFirstLineTitle): first non-empty markdown line,

@@ -38,6 +38,7 @@ import com.esper.android.data.local.NotebookWithDetails
 import com.esper.android.data.model.NotebookEntity
 import com.esper.android.data.model.ShelfEntity
 import com.esper.android.ui.components.BookCard
+import com.esper.android.ui.components.ConfirmDeleteDialog
 import com.esper.android.ui.components.CustomBottomNavBar
 import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.components.OfflineNoticeBanner
@@ -76,14 +77,17 @@ fun BookshelfScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedShelfId by remember { mutableStateOf<String?>(null) }
     var isRefreshing by remember { mutableStateOf(false) }
+    var bookToDelete by remember { mutableStateOf<NotebookEntity?>(null) }
+    var shelfToDelete by remember { mutableStateOf<ShelfEntity?>(null) }
 
     val pageSize = 6
     var currentPage by remember { mutableIntStateOf(1) }
 
-    // Books are strictly ordered latest to oldest; the journal is a
-    // standalone workspace and never clutters the bookshelf grid.
+    // Books are strictly ordered latest to oldest; journal records (legacy
+    // "esper-journal" and per-user "esper-journal-<uid>") are standalone
+    // workspaces and never clutter the bookshelf grid.
     val sortedNotebooks = remember(notebooks) {
-        notebooks.filter { it.id != "esper-journal" }.sortedByDescending { it.updatedAt }
+        notebooks.filter { !it.id.startsWith("esper-journal") }.sortedByDescending { it.updatedAt }
     }
 
     val filtered = remember(sortedNotebooks, selectedTagFilter, searchQuery, selectedShelfId, shelves) {
@@ -250,7 +254,7 @@ fun BookshelfScreen(
                                     }
                                     if (!isReadOnly) {
                                         IconButton(
-                                            onClick = { onDeleteShelf(s.id) },
+                                            onClick = { shelfToDelete = s },
                                             modifier = Modifier.size(24.dp)
                                         ) {
                                             Icon(Icons.Default.Delete, contentDescription = "Delete", tint = RoseRuby, modifier = Modifier.size(14.dp))
@@ -381,7 +385,7 @@ fun BookshelfScreen(
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     val quickTags = remember(notebooks) {
-                        val extracted = notebooks.filter { it.id != "esper-journal" }.flatMap { it.tagsCsv.split(",") }
+                        val extracted = notebooks.filter { !it.id.startsWith("esper-journal") }.flatMap { it.tagsCsv.split(",") }
                             .map { it.trim() }
                             .filter { it.isNotEmpty() }
                             .distinct()
@@ -512,13 +516,37 @@ fun BookshelfScreen(
                                     notebook = book,
                                     onClick = { onOpenNotebook(book.id) },
                                     onEdit = { onConfigureNotebook(book) },
-                                    onDelete = { onDeleteNotebook(book.id) }
+                                    onDelete = { bookToDelete = book }
                                 )
                             }
                         }
                     }
                 }
             }
+        }
+
+        bookToDelete?.let { book ->
+            ConfirmDeleteDialog(
+                title = "Delete Notebook",
+                message = "Are you sure you want to delete \u201C${book.title}\u201D? All pages, companion visuals, and review questions will be permanently deleted.",
+                onConfirm = {
+                    onDeleteNotebook(book.id)
+                    bookToDelete = null
+                },
+                onDismiss = { bookToDelete = null }
+            )
+        }
+
+        shelfToDelete?.let { shelf ->
+            ConfirmDeleteDialog(
+                title = "Delete Shelf",
+                message = "Are you sure you want to delete shelf \u201C${shelf.title}\u201D? Books on this shelf will not be deleted.",
+                onConfirm = {
+                    onDeleteShelf(shelf.id)
+                    shelfToDelete = null
+                },
+                onDismiss = { shelfToDelete = null }
+            )
         }
     }
 }
