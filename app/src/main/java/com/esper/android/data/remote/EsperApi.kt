@@ -103,6 +103,10 @@ data class SyncResult(
     val id: String?
 )
 
+/** JSON body map for Retrofit. @JvmSuppressWildcards avoids the
+ *  'type must not include a wildcard' reflection error for Any? values. */
+typealias PayloadMap = Map<String, @JvmSuppressWildcards Any?>
+
 interface EsperApiService {
     @GET("health")
     suspend fun getHealth(): HealthResponse
@@ -126,22 +130,22 @@ interface EsperApiService {
     ): RemoteNotebook
 
     @POST("notes")
-    suspend fun createNote(@Body body: Map<String, Any?>): SyncResult
+    suspend fun createNote(@Body body: PayloadMap): SyncResult
 
     @PUT("notes/{id}")
-    suspend fun updateNote(@Path("id") id: String, @Body body: Map<String, Any?>): SyncResult
+    suspend fun updateNote(@Path("id") id: String, @Body body: PayloadMap): SyncResult
 
     @DELETE("notes/{id}")
     suspend fun deleteNote(@Path("id") id: String): SyncResult
 
     @POST("notes/{id}/pages")
-    suspend fun createPage(@Path("id") id: String, @Body body: Map<String, Any?>): SyncResult
+    suspend fun createPage(@Path("id") id: String, @Body body: PayloadMap): SyncResult
 
     @PATCH("notes/{id}/pages/{pageId}")
     suspend fun patchPage(
         @Path("id") id: String,
         @Path("pageId") pageId: String,
-        @Body body: Map<String, Any?>
+        @Body body: PayloadMap
     ): SyncResult
 
     @DELETE("notes/{id}/pages/{pageId}")
@@ -165,10 +169,10 @@ interface EsperApiService {
     suspend fun getShelves(): List<RemoteShelf>
 
     @POST("shelves")
-    suspend fun createShelf(@Body body: Map<String, Any?>): SyncResult
+    suspend fun createShelf(@Body body: PayloadMap): SyncResult
 
     @PUT("shelves/{id}")
-    suspend fun updateShelf(@Path("id") id: String, @Body body: Map<String, Any?>): SyncResult
+    suspend fun updateShelf(@Path("id") id: String, @Body body: PayloadMap): SyncResult
 
     @DELETE("shelves/{id}")
     suspend fun deleteShelf(@Path("id") id: String): SyncResult
