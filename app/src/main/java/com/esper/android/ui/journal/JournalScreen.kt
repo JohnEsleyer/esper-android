@@ -10,12 +10,14 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.model.PageEntity
+import com.esper.android.ui.components.ConfirmDeleteDialog
 import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.components.OfflineNoticeBanner
 import com.esper.android.ui.lexical.ComposeLexicalEditor
@@ -35,8 +37,9 @@ fun JournalScreen(
     val isReadOnly = LocalReadOnlyMode.current
     BackHandler { onNavigateBack() }
 
-    // Always open directly on the latest created page.
-    var activePageIndex by remember(pages.size) {
+    // Always open directly on the latest created page; keep the user's place
+    // across syncs — a remote re-emission must not teleport the entry index.
+    var activePageIndex by rememberSaveable {
         mutableIntStateOf((pages.size - 1).coerceAtLeast(0))
     }
     // Clamp when entries are added/removed from another device.
@@ -46,6 +49,7 @@ fun JournalScreen(
     }
 
     val activePage = pages.getOrNull(activePageIndex)
+    var showDeleteEntryConfirm by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -95,11 +99,7 @@ fun JournalScreen(
                             Icon(Icons.Default.Add, contentDescription = "New Entry", tint = IndigoAccent)
                         }
                         if (pages.size > 1 && activePage != null) {
-                            IconButton(onClick = {
-                                val idToDelete = activePage.id
-                                activePageIndex = (activePageIndex - 1).coerceAtLeast(0)
-                                onDeletePage(idToDelete)
-                            }) {
+                            IconButton(onClick = { showDeleteEntryConfirm = true }) {
                                 Icon(Icons.Default.Delete, contentDescription = "Delete Entry", tint = RoseRuby)
                             }
                         }
@@ -191,7 +191,8 @@ fun JournalScreen(
                         },
                         onTimestampClicked = {},
                         modifier = Modifier.fillMaxSize(),
-                        readOnly = isReadOnly
+                        readOnly = isReadOnly,
+                        tapToEditAnywhere = true
                     )
                 }
             } else {
@@ -200,5 +201,19 @@ fun JournalScreen(
                 }
             }
         }
+    }
+
+    if (showDeleteEntryConfirm && activePage != null) {
+        ConfirmDeleteDialog(
+            title = "Delete Journal Entry",
+            message = "Are you sure you want to delete entry \u201C${activePage.title}\u201D?",
+            onConfirm = {
+                val idToDelete = activePage.id
+                activePageIndex = (activePageIndex - 1).coerceAtLeast(0)
+                onDeletePage(idToDelete)
+                showDeleteEntryConfirm = false
+            },
+            onDismiss = { showDeleteEntryConfirm = false }
+        )
     }
 }

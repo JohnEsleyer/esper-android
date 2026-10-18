@@ -5,7 +5,9 @@ import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -20,11 +22,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -67,29 +76,97 @@ fun ComposeLexicalEditor(
     onContentChanged: (String) -> Unit,
     onTimestampClicked: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    readOnly: Boolean = LocalReadOnlyMode.current
+    readOnly: Boolean = LocalReadOnlyMode.current,
+    /** Journal UX: tapping anywhere starts editing — switches out of the
+     *  rendered view, focuses the raw field and summons the keyboard. */
+    tapToEditAnywhere: Boolean = false
 ) {
     val coroutineScope = rememberCoroutineScope()
-    var rawText by remember(initialMarkdown) { mutableStateOf(initialMarkdown) }
+    val currentOnContentChanged by rememberUpdatedState(onContentChanged)
+    var rawText by remember { mutableStateOf(initialMarkdown) }
+    val currentRawText by rememberUpdatedState(rawText)
     var blocks by remember(rawText) { mutableStateOf(LexicalParser.parseToLexicalAst(rawText)) }
     var isRawEditMode by remember { mutableStateOf(false) }
     var debounceJob by remember { mutableStateOf<Job?>(null) }
 
-    // A pending debounce belongs to the previous chapter instance: cancel it
-    // on chapter switch / dispose so it can never PATCH the new page with
-    // stale text after the 300ms window.
-    DisposableEffect(initialMarkdown) {
-        onDispose { debounceJob?.cancel() }
+    // Editable field state (text + cursor selection), so tap-anywhere can
+    // place the cursor at the end the way "start writing" implies.
+    var fieldValue by remember {
+        mutableStateOf(TextFieldValue(initialMarkdown, TextRange(initialMarkdown.length)))
     }
 
-    fun commit(newText: String) {
+    // Tracking focus lets background syncs (SSE echo -> pull -> Room re-emit)
+    // be buffered while the user is typing instead of resetting the field.
+    var isFieldFocused by remember { mutableStateOf(false) }
+    var pendingExternalText by remember { mutableStateOf<String?>(null) }
+
+    // Tap-anywhere editing support: incrementing armRequest counts edit
+    // intents (page taps, mode toggles) and fires focus + keyboard once the
+    // raw field is composed. It never resets to 0, so a new intent always
+    // re-key the effect without cancelling an in-flight focus request.
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var armRequest by remember { mutableIntStateOf(0) }
+
+    fun commitText(newText: String) {
         if (readOnly) return
         rawText = newText
         blocks = LexicalParser.parseToLexicalAst(newText)
         debounceJob?.cancel()
         debounceJob = coroutineScope.launch {
             delay(300)
-            onContentChanged(newText)
+            currentOnContentChanged(newText)
+        }
+    }
+
+    /** Toolbar actions append at the content end; move both text and the
+     *  cursor there afterwards. */
+    fun commitToolbarAction(action: LexicalAction) {
+        val updated = applyAction(rawText, action)
+        commitText(updated)
+        fieldValue = TextFieldValue(updated, TextRange(updated.length))
+    }
+
+    /** Remote/Room re-emissions: update source of truth + rendered blocks
+     *  without scheduling a save (no local change to push back). */
+    fun renderExternal(text: String) {
+        rawText = text
+        blocks = LexicalParser.parseToLexicalAst(text)
+        fieldValue = TextFieldValue(text, TextRange(text.length))
+    }
+
+    // Synchronize external markdown changes (Room re-emissions) without ever
+    // clobbering in-flight keystrokes: while the field is focused, incoming
+    // text is buffered and applied only once the field is unfocused.
+    LaunchedEffect(initialMarkdown) {
+        if (rawText == initialMarkdown) return@LaunchedEffect
+        if (isFieldFocused || debounceJob?.isActive == true) {
+            pendingExternalText = initialMarkdown
+        } else {
+            renderExternal(initialMarkdown)
+        }
+    }
+
+    // Drain the buffered remote/Room text (if any still differs) when the
+    // user idles away from the field. Skip while a debounce is still saving
+    // so a stale snapshot never replays over fresher local text.
+    LaunchedEffect(isFieldFocused) {
+        if (isFieldFocused) return@LaunchedEffect
+        val buffered = pendingExternalText
+        pendingExternalText = null
+        if (buffered != null && debounceJob?.isActive != true && buffered != rawText) {
+            renderExternal(buffered)
+        }
+    }
+
+    // Flush pending changes on dispose so a 300ms window never drops the tail
+    // of an edit when the user leaves the screen.
+    DisposableEffect(Unit) {
+        onDispose {
+            if (debounceJob?.isActive == true) {
+                debounceJob?.cancel()
+                currentOnContentChanged(currentRawText)
+            }
         }
     }
 
@@ -103,11 +180,13 @@ fun ComposeLexicalEditor(
         LexicalToolbar(
             isRawMode = isRawEditMode,
             readOnly = readOnly,
-            onToggleMode = { isRawEditMode = !isRawEditMode },
-            onAction = { action ->
-                val updated = applyAction(rawText, action)
-                commit(updated)
-            }
+            onToggleMode = {
+                isRawEditMode = !isRawEditMode
+                // Switching into the editable view from the chip is an explicit
+                // edit intent: arm focus + keyboard alongside tap-anywhere.
+                if (tapToEditAnywhere && isRawEditMode && !readOnly) armRequest++
+            },
+            onAction = { action -> commitToolbarAction(action) }
         )
 
         HorizontalDivider(color = BorderSlate.copy(alpha = 0.5f), thickness = 1.dp)
@@ -125,10 +204,39 @@ fun ComposeLexicalEditor(
                         .fillMaxSize()
                         .verticalScroll(scrollState)
                         .padding(horizontal = 16.dp, vertical = 12.dp)
+                        // Tap anywhere in the page (not just on the text line)
+                        // to summon the cursor and keyboard.
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { if (tapToEditAnywhere && !readOnly) armRequest++ }
                 ) {
+                    // Focus + keyboard once the field is composed, either via
+                    // tap-anywhere or the Native/Raw chip toggling into edit.
+                    LaunchedEffect(armRequest) {
+                        if (armRequest == 0 || readOnly || !isRawEditMode) return@LaunchedEffect
+                        // Tap-to-edit means "start writing": place the cursor
+                        // at the end before requesting focus.
+                        fieldValue = TextFieldValue(rawText, TextRange(rawText.length))
+                        // Retry briefly: the field may still be entering the
+                        // composition on the first frame after the mode flip.
+                        repeat(3) {
+                            delay(50)
+                            focusRequester.requestFocus()
+                            keyboardController?.show()
+                        }
+                    }
                     BasicTextField(
-                        value = rawText,
-                        onValueChange = { if (!readOnly) commit(it) },
+                        value = fieldValue,
+                        onValueChange = { fresh ->
+                            if (!readOnly) {
+                                // Keep the IME's own value (text + selection)
+                                // exactly as delivered; only then mirror the
+                                // text into rawText/blocks and save.
+                                fieldValue = fresh
+                                commitText(fresh.text)
+                            }
+                        },
                         readOnly = readOnly,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(
                             color = if (readOnly) TextSecondary else TextPrimary,
@@ -136,16 +244,31 @@ fun ComposeLexicalEditor(
                             fontFamily = FontFamily.Monospace
                         ),
                         cursorBrush = SolidColor(IndigoAccent),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequester)
+                            .onFocusChanged { isFieldFocused = it.isFocused }
                     )
                     // Ample fixed empty space below the editor so typing text is always visible above the keyboard
                     Spacer(modifier = Modifier.height(340.dp))
                 }
             } else {
-                // Native Lexical Component Viewport with fixed bottom padding
+                // Native Lexical Component Viewport with fixed bottom padding.
+                // In tap-to-edit screens, any tap starts editing: flips to the
+                // raw field and focuses it (child taps like links still win,
+                // they consume their own touches first).
+                val nativeTapModifier = if (tapToEditAnywhere && !readOnly) {
+                    Modifier.pointerInput(Unit) {
+                        detectTapGestures {
+                            isRawEditMode = true
+                            armRequest++
+                        }
+                    }
+                } else Modifier
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
+                        .then(nativeTapModifier)
                         .padding(horizontal = 16.dp),
                     contentPadding = PaddingValues(top = 16.dp, bottom = 340.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
