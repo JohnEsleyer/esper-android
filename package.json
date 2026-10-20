@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "deploy": "bun scripts/wireless-deploy.js",
+    "deploy:debug": "bun scripts/wireless-deploy.js",
+    "deploy:release": "bun scripts/wireless-deploy.js --release",
     "install:device": "bun scripts/wireless-deploy.js --skip-build",
+    "install:device:debug": "bun scripts/wireless-deploy.js --skip-build",
+    "install:device:release": "bun scripts/wireless-deploy.js --release --skip-build",
     "pair": "bun scripts/wireless-deploy.js --pair --skip-build"
   }
 }

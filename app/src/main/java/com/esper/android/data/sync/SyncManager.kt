@@ -2,6 +2,7 @@ package com.esper.android.data.sync
 
 import com.esper.android.data.local.EsperDatabase
 import com.esper.android.data.remote.EsperApiService
+import com.esper.android.data.remote.RemoteNotebook
 import com.google.gson.Gson
 import com.esper.android.data.model.CanvasEntity
 import com.esper.android.data.model.NotebookEntity
@@ -53,75 +54,7 @@ class SyncManager(
 
         // Step C: Upsert remote notebooks and preserve whiteboard JSON
         remoteNotes.forEach { r ->
-            db.dao().upsertNotebook(
-                NotebookEntity(
-                    id = r.id,
-                    title = r.title,
-                    description = r.description ?: "",
-                    ownerSub = ownerSub ?: "*",
-                    visibility = r.visibility ?: "public",
-                    isPinned = r.isPinned ?: false,
-                    tagsCsv = r.tags?.joinToString(",") ?: "",
-                    coverPreset = r.coverPreset ?: "celestial",
-                    coverImage = r.coverImage,
-                    updatedAt = System.currentTimeMillis()
-                )
-            )
-            r.pages?.mapIndexed { idx, p ->
-                PageEntity(
-                    id = p.id,
-                    notebookId = r.id,
-                    parentId = p.parentId,
-                    title = p.title,
-                    notes = p.notes ?: "",
-                    position = p.position ?: idx
-                )
-            }?.let { db.dao().upsertPages(it) }
-
-            r.canvases?.map { c ->
-                // Preserve whiteboard elements without truncating to ""
-                val payload = when (c.type.lowercase()) {
-                    "html" -> {
-                        when (val d = c.data) {
-                            is String -> d
-                            is Map<*, *> -> d["code"]?.toString() ?: gson.toJson(d)
-                            else -> gson.toJson(d)
-                        }
-                    }
-                    "youtube" -> {
-                        when (val d = c.data) {
-                            is String -> d
-                            is Map<*, *> -> d["url"]?.toString() ?: gson.toJson(d)
-                            else -> gson.toJson(d)
-                        }
-                    }
-                    else -> {
-                        // "excalidraw", "draw", "canvas"
-                        when (val d = c.data) {
-                            is String -> d
-                            else -> gson.toJson(d)
-                        }
-                    }
-                }
-                CanvasEntity(
-                    id = c.id,
-                    notebookId = r.id,
-                    kind = c.type,
-                    title = c.title,
-                    payloadJson = payload,
-                    assignedPagesCsv = c.assignedPages?.joinToString(",") ?: ""
-                )
-            }?.let { db.dao().upsertCanvases(it) }
-
-            r.questions?.mapIndexed { idx, q ->
-                QuestionEntity(
-                    id = q.id,
-                    notebookId = r.id,
-                    title = q.title,
-                    answer = q.answer,
-                    position = q.position ?: idx
-                )
-            }?.let { db.dao().upsertQuestions(it) }
+            upsertRemoteNotebook(r, ownerSub)
         }
 
         // Step D: Reconcile shelves (best-effort; never fails the sync)
@@ -152,6 +85,82 @@ class SyncManager(
         }
 
         return SyncReport(remoteIds, remoteNotes.size)
+    }
+
+    /**
+     * Writes one remote notebook (with its pages, canvases and questions) into Room.
+     * Reused by full sync, protected unlock, and journal adoption.
+     */
+    suspend fun upsertRemoteNotebook(r: RemoteNotebook, ownerSub: String?) {
+        db.dao().upsertNotebook(
+            NotebookEntity(
+                id = r.id,
+                title = r.title,
+                description = r.description ?: "",
+                ownerSub = ownerSub ?: "*",
+                visibility = r.visibility ?: "public",
+                isPinned = r.isPinned ?: false,
+                tagsCsv = r.tags?.joinToString(",") ?: "",
+                coverPreset = r.coverPreset ?: "celestial",
+                coverImage = r.coverImage,
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+        r.pages?.mapIndexed { idx, p ->
+            PageEntity(
+                id = p.id,
+                notebookId = r.id,
+                parentId = p.parentId,
+                title = p.title,
+                notes = p.notes ?: "",
+                position = p.position ?: idx
+            )
+        }?.let { db.dao().upsertPages(it) }
+
+        r.canvases?.map { c ->
+            // Preserve whiteboard elements without truncating to ""
+            val payload = when (c.type.lowercase()) {
+                "html" -> {
+                    when (val d = c.data) {
+                        is String -> d
+                        is Map<*, *> -> d["code"]?.toString() ?: gson.toJson(d)
+                        else -> gson.toJson(d)
+                    }
+                }
+                "youtube" -> {
+                    when (val d = c.data) {
+                        is String -> d
+                        is Map<*, *> -> d["url"]?.toString() ?: gson.toJson(d)
+                        else -> gson.toJson(d)
+                    }
+                }
+                else -> {
+                    // "excalidraw", "draw", "canvas"
+                    when (val d = c.data) {
+                        is String -> d
+                        else -> gson.toJson(d)
+                    }
+                }
+            }
+            CanvasEntity(
+                id = c.id,
+                notebookId = r.id,
+                kind = c.type,
+                title = c.title,
+                payloadJson = payload,
+                assignedPagesCsv = c.assignedPages?.joinToString(",") ?: ""
+            )
+        }?.let { db.dao().upsertCanvases(it) }
+
+        r.questions?.mapIndexed { idx, q ->
+            QuestionEntity(
+                id = q.id,
+                notebookId = r.id,
+                title = q.title,
+                answer = q.answer,
+                position = q.position ?: idx
+            )
+        }?.let { db.dao().upsertQuestions(it) }
     }
 
     /**

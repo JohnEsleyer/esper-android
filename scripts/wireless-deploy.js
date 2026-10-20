@@ -12,7 +12,6 @@ const __dirname = path.dirname(__filename);
 
 // Paths
 const ROOT_DIR = path.resolve(__dirname, '..');
-const APK_PATH = path.join(ROOT_DIR, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
 const CONFIG_FILE = path.join(ROOT_DIR, '.wireless-device.json');
 const PACKAGE_NAME = 'com.johnesleyer.esper';
 const ACTIVITY_NAME = 'com.esper.android.MainActivity';
@@ -31,8 +30,17 @@ const c = {
 };
 
 const args = process.argv.slice(2);
+const isRelease = args.includes('--release') || args.includes('-r');
 const skipBuild = args.includes('--skip-build') || args.includes('-s');
 const forcePair = args.includes('--pair') || args.includes('-p');
+
+// Build target: the debug build by default, the optimized, R8-minified
+// production build when --release (-r) is passed.
+const buildTask = isRelease ? 'assembleRelease' : 'assembleDebug';
+const apkSubdir = isRelease ? 'release' : 'debug';
+const apkName = isRelease ? 'app-release.apk' : 'app-debug.apk';
+const APK_PATH = path.join(ROOT_DIR, 'app', 'build', 'outputs', 'apk', apkSubdir, apkName);
+const buildLabel = isRelease ? 'Optimized Release' : 'Debug';
 
 // Helper for interactive prompts
 function prompt(question) {
@@ -100,9 +108,9 @@ async function main() {
 
   // 1. Compile APK (unless skipped)
   if (!skipBuild) {
-    console.log(`${c.yellow}⚙ [1/4] Compiling Debug APK via Gradle...${c.reset}`);
+    console.log(`${c.yellow}⚙ [1/4] Compiling ${buildLabel} APK via Gradle (${buildTask})...${c.reset}`);
     const gradlew = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
-    const buildResult = spawnSync(gradlew, ['assembleDebug', '--no-daemon'], {
+    const buildResult = spawnSync(gradlew, [buildTask, '--no-daemon'], {
       cwd: ROOT_DIR,
       stdio: 'inherit',
       shell: true,
@@ -117,9 +125,9 @@ async function main() {
       console.error(`\n${c.red}✖ APK not found at ${APK_PATH}${c.reset}`);
       process.exit(1);
     }
-    console.log(`${c.green}✔ Build succeeded!${c.reset}\n`);
+    console.log(`${c.green}✔ ${buildLabel} build succeeded!${c.reset}\n`);
   } else {
-    console.log(`${c.yellow}⚡ [1/4] Skipping build step (using existing APK).${c.reset}`);
+    console.log(`${c.yellow}⚡ [1/4] Skipping build step (using existing ${buildLabel} APK).${c.reset}`);
     if (!fs.existsSync(APK_PATH)) {
       console.error(`${c.red}✖ No APK found at ${APK_PATH}. Run build first!${c.reset}`);
       process.exit(1);
@@ -235,7 +243,7 @@ async function main() {
   }
 
   // 4. Install APK
-  console.log(`\n${c.yellow}🚀 [3/4] Installing APK onto ${c.bright}${targetDevice}${c.reset}${c.yellow}...${c.reset}`);
+  console.log(`\n${c.yellow}🚀 [3/4] Installing ${buildLabel} APK onto ${c.bright}${targetDevice}${c.reset}${c.yellow}...${c.reset}`);
   const installResult = spawnSync(adb, ['-s', targetDevice, 'install', '-r', '-d', APK_PATH], {
     stdio: 'inherit',
   });
@@ -253,7 +261,7 @@ async function main() {
   });
 
   console.log(`\n${c.green}======================================================${c.reset}`);
-  console.log(`${c.bright}${c.green}✔ SUCCESS: Esper is now running on your phone!${c.reset}`);
+  console.log(`${c.bright}${c.green}✔ SUCCESS: Esper (${isRelease ? 'RELEASE' : 'DEBUG'}) is now running on your phone!${c.reset}`);
   console.log(`${c.green}======================================================${c.reset}\n`);
 }
 

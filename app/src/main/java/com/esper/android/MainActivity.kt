@@ -21,6 +21,7 @@ import com.esper.android.data.local.EsperDatabase
 import com.esper.android.data.local.NotebookWithDetails
 import com.esper.android.data.model.*
 import com.esper.android.data.remote.RemoteClient
+import com.esper.android.data.remote.RemoteNotebook
 import com.esper.android.data.remote.MeLimits
 import com.esper.android.ui.auth.LoginScreen
 import com.esper.android.ui.bookshelf.AllTagsScreen
@@ -141,6 +142,24 @@ class MainActivity : ComponentActivity() {
             if (e is retrofit2.HttpException && e.code() == 404) {
                 api.createNote(payload + ("id" to docId))
             } else throw e
+        }
+    }
+
+    /**
+     * Asks the server whether it already holds a notebook.
+     *
+     * The three outcomes matter: a 404 means "the server has no such
+     * notebook" (safe to create), any other failure means "unknown" (the
+     * server may well have it — never push over it in that case).
+     */
+    private suspend fun lookupRemoteNote(id: String): RemoteNoteLookup = try {
+        RemoteNoteLookup.Found(api.getNote(id))
+    } catch (e: Exception) {
+        if (e is retrofit2.HttpException && e.code() == 404) {
+            RemoteNoteLookup.Absent
+        } else {
+            Log.w("EsperSync", "Remote lookup for $id failed", e)
+            RemoteNoteLookup.Unknown
         }
     }
 
@@ -440,50 +459,88 @@ class MainActivity : ComponentActivity() {
                     coroutineScope.launch(Dispatchers.IO) {
                         val journalId = journalDocIdFor(currentUser?.uid)
                         if (db.dao().getNotebookById(journalId) == null) {
-                            val migrated = db.dao().getNotebookDetails("esper-journal")
-                            if (migrated != null) {
-                                // One-time migration: adopt the legacy shared
-                                // record under this user's private id so web
-                                // and Android edit the same server notebook.
-                                val legacyBook = migrated.notebook
-                                db.dao().upsertNotebook(
-                                    legacyBook.copy(id = journalId, updatedAt = System.currentTimeMillis())
-                                )
-                                db.dao().upsertPages(migrated.pages.map { it.copy(notebookId = journalId) })
-                                db.dao().upsertCanvases(migrated.canvases.map { it.copy(notebookId = journalId) })
-                                db.dao().upsertQuestions(migrated.questions.map { it.copy(notebookId = journalId) })
-                                db.dao().deleteNotebookCascade("esper-journal")
+                            // 1. The server is the authority: if it already holds
+                            //    this user's journal, adopt it into Room and do
+                            //    NOT push back. A failed lookup counts as
+                            //    "unknown" (not "absent"), so nothing is ever
+                            //    pushed over a journal we could not inspect.
+                            val lookup = if (currentUser != null) {
+                                lookupRemoteNote(journalId)
                             } else {
-                                // Fresh journal seed (deterministic id shared with web).
-                                val dateStr = try {
-                                    java.text.SimpleDateFormat("EEE, MMM d", java.util.Locale.getDefault()).format(java.util.Date())
-                                } catch (_: Exception) { "Today" }
-                                db.dao().upsertNotebook(
-                                    NotebookEntity(
-                                        id = journalId,
-                                        title = "Personal Journal",
-                                        description = "Single book dumping ground for quick ideas",
-                                        ownerSub = currentUser?.uid ?: "*",
-                                        visibility = "restricted",
-                                        tagsCsv = "Journal",
-                                        updatedAt = System.currentTimeMillis()
-                                    )
-                                )
-                                db.dao().upsertPage(
-                                    PageEntity(
-                                        id = "jp-1",
-                                        notebookId = journalId,
-                                        title = dateStr,
-                                        notes = "# $dateStr\n\nJot down ideas and quick thoughts here...",
-                                        position = 0
-                                    )
-                                )
+                                RemoteNoteLookup.Absent
                             }
-                            val migrationOp = SyncOp.FullBook(journalId)
-                            writeQueue.markDirty(migrationOp)
-                            launch(Dispatchers.IO) {
-                                if (replayOp(migrationOp)) {
-                                    writeQueue.markClean(migrationOp)
+                            val remote = (lookup as? RemoteNoteLookup.Found)?.notebook
+
+                            // 2. Legacy shared journal (pre per-user migration).
+                            val migrated = db.dao().getNotebookDetails("esper-journal")
+
+                            when (determineJournalBootstrapAction(
+                                serverJournalExists = remote != null,
+                                legacyLocalExists = migrated != null
+                            )) {
+                                JournalBootstrapAction.ADOPT_SERVER -> {
+                                    // Adopt the server copy. Never push it back.
+                                    remote?.let {
+                                        syncManager.upsertRemoteNotebook(it, currentUser?.uid)
+                                    }
+                                }
+
+                                JournalBootstrapAction.MIGRATE_LEGACY -> {
+                                    val legacy = migrated ?: return@launch
+                                    // One-time migration: adopt the legacy shared
+                                    // record under this user's private id so web
+                                    // and Android edit the same server notebook.
+                                    val legacyBook = legacy.notebook
+                                    db.dao().upsertNotebook(
+                                        legacyBook.copy(id = journalId, updatedAt = System.currentTimeMillis())
+                                    )
+                                    db.dao().upsertPages(legacy.pages.map { it.copy(notebookId = journalId) })
+                                    db.dao().upsertCanvases(legacy.canvases.map { it.copy(notebookId = journalId) })
+                                    db.dao().upsertQuestions(legacy.questions.map { it.copy(notebookId = journalId) })
+                                    db.dao().deleteNotebookCascade("esper-journal")
+
+                                    // Push the migrated content only when the
+                                    // server is known to have no journal of its
+                                    // own and the content is real user notes.
+                                    if (lookup is RemoteNoteLookup.Absent && hasMeaningfulJournalContent(legacy)) {
+                                        val migrationOp = SyncOp.FullBook(journalId)
+                                        writeQueue.markDirty(migrationOp)
+                                        launch(Dispatchers.IO) {
+                                            if (replayOp(migrationOp)) {
+                                                writeQueue.markClean(migrationOp)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                JournalBootstrapAction.SEED_FRESH -> {
+                                    // 3. Fresh local seed only.
+                                    //    DO NOT push an empty seed to the server:
+                                    //    that is what destroyed the journal in
+                                    //    the 2026-10-20 incident.
+                                    val dateStr = try {
+                                        java.text.SimpleDateFormat("EEE, MMM d", java.util.Locale.getDefault()).format(java.util.Date())
+                                    } catch (_: Exception) { "Today" }
+                                    db.dao().upsertNotebook(
+                                        NotebookEntity(
+                                            id = journalId,
+                                            title = "Personal Journal",
+                                            description = "Single book dumping ground for quick ideas",
+                                            ownerSub = currentUser?.uid ?: "*",
+                                            visibility = "restricted",
+                                            tagsCsv = "Journal",
+                                            updatedAt = System.currentTimeMillis()
+                                        )
+                                    )
+                                    db.dao().upsertPage(
+                                        PageEntity(
+                                            id = "jp-1",
+                                            notebookId = journalId,
+                                            title = dateStr,
+                                            notes = "# $dateStr\n\nJot down ideas and quick thoughts here...",
+                                            position = 0
+                                        )
+                                    )
                                 }
                             }
                         }
@@ -563,26 +620,7 @@ class MainActivity : ComponentActivity() {
                             guestTokens.put(docId, token)
                             // Pull the now-readable book into Room, then open it.
                             val remote = api.getNote(docId, token)
-                            db.dao().upsertNotebook(
-                                NotebookEntity(
-                                    id = remote.id,
-                                    title = remote.title,
-                                    description = remote.description ?: "",
-                                    ownerSub = currentUser?.uid ?: "*",
-                                    visibility = remote.visibility ?: "protected",
-                                    isPinned = false,
-                                    tagsCsv = remote.tags?.joinToString(",") ?: "",
-                                    coverPreset = remote.coverPreset ?: "celestial",
-                                    coverImage = remote.coverImage,
-                                    updatedAt = System.currentTimeMillis()
-                                )
-                            )
-                            remote.pages?.mapIndexed { idx, p ->
-                                PageEntity(
-                                    id = p.id, notebookId = remote.id, parentId = p.parentId,
-                                    title = p.title, notes = p.notes ?: "", position = p.position ?: idx
-                                )
-                            }?.let { db.dao().upsertPages(it) }
+                            syncManager.upsertRemoteNotebook(remote, currentUser?.uid)
                             withContext(Dispatchers.Main) {
                                 gateBusy = false
                                 passwordGate = null
@@ -605,11 +643,17 @@ class MainActivity : ComponentActivity() {
                             val report = syncManager.sync(currentUser?.uid)
 
                             // If journal exists locally but has not been created on
-                            // the server yet, push it.
+                            // the server yet, push it only if it has real user content
+                            // and the server doesn't already have a journal.
                             if (currentUser != null && !report.remoteIds.contains(currentJournalId)) {
-                                val journalDetails = db.dao().getNotebookDetails(currentJournalId)
-                                if (journalDetails != null) {
-                                    pushFullBook(currentJournalId)
+                                val remoteJournal = try { api.getNote(currentJournalId) } catch (_: Exception) { null }
+                                if (remoteJournal != null) {
+                                    syncManager.upsertRemoteNotebook(remoteJournal, currentUser?.uid)
+                                } else {
+                                    val journalDetails = db.dao().getNotebookDetails(currentJournalId)
+                                    if (journalDetails != null && hasMeaningfulJournalContent(journalDetails)) {
+                                        pushFullBook(currentJournalId)
+                                    }
                                 }
                             }
 
@@ -1425,4 +1469,50 @@ internal fun deriveChapterTitle(markdown: String): String {
         .trim()
         .take(100)
     return stripped.ifEmpty { "Untitled Chapter" }
+}
+
+/**
+ * The outcome of asking the server whether it holds a given notebook.
+ *
+ * [Unknown] is deliberately distinct from [Absent]: a network error must never
+ * be read as "the server has no such notebook", otherwise a client would push
+ * local state over the server's real content.
+ */
+internal sealed interface RemoteNoteLookup {
+    data class Found(val notebook: RemoteNotebook) : RemoteNoteLookup
+    data object Absent : RemoteNoteLookup
+    data object Unknown : RemoteNoteLookup
+}
+
+/**
+ * Determines whether a local journal contains meaningful user notes, as opposed
+ * to being empty or containing only the starter template text.
+ */
+internal fun hasMeaningfulJournalContent(details: NotebookWithDetails?): Boolean {
+    if (details == null) return false
+    if (details.canvases.isNotEmpty() || details.questions.isNotEmpty()) return true
+    if (details.pages.size > 1) return true
+    val firstPage = details.pages.firstOrNull() ?: return false
+    val notes = firstPage.notes.trim()
+    if (notes.isEmpty()) return false
+    val lines = notes.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    val isDefaultSeed = lines.all { line ->
+        line.startsWith("# ") || line == "Jot down ideas and quick thoughts here..."
+    }
+    return !isDefaultSeed
+}
+
+enum class JournalBootstrapAction {
+    ADOPT_SERVER,
+    MIGRATE_LEGACY,
+    SEED_FRESH
+}
+
+internal fun determineJournalBootstrapAction(
+    serverJournalExists: Boolean,
+    legacyLocalExists: Boolean
+): JournalBootstrapAction = when {
+    serverJournalExists -> JournalBootstrapAction.ADOPT_SERVER
+    legacyLocalExists -> JournalBootstrapAction.MIGRATE_LEGACY
+    else -> JournalBootstrapAction.SEED_FRESH
 }
