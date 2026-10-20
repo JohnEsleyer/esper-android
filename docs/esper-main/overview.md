@@ -48,6 +48,14 @@
 - Backend: Skiff recipe `skiff.json` (musl static build → `/opt/skiff/apps/esper`, `setup.sh` applies schema, systemd + Caddy). Reinstall = fresh SurrealDB + same recipe.
 - Web: `bun run dev[:local|:prod]`, `bun run build`, `pages:deploy/upload` (Cloudflare Pages, `wrangler.jsonc`). Docs prompts: `docs/ai-book-bundle.md`, `docs/ai-book-cover.md`.
 
+## Android bookshelf (filtering + covers)
+- The bookshelf grid is **not** a flat list of every notebook. `ui/bookshelf/BookshelfScreen.kt` narrows `sortedNotebooks` by **tag AND search AND shelf** (all ANDed), then paginates **6 books per page** with a pager in the bottom nav.
+- "All Notebooks" is not a mode — it is only `selectedShelfId == null`. The bottom-nav **Library** button clears the *tag* filter but **not** the shelf filter, and the **"Clear filter"** button clears the shelf but **not** the tag filter. A shelf therefore shows the intersection, and "Library" does not reliably return to the full library.
+- Shelf membership is stored as a CSV (`ShelfEntity.notebookIdsCsv`, built in `SyncManager`) and tested with `String.contains`, which is a substring match, not a membership test. `shelves.find { … }` returning `null` (stale shelf id) makes the whole shelf render empty.
+- Covers are SVG **data URIs** for the seeded books (1000×1440, with a `feGaussianBlur` filter) and remote WebP for uploads; `CoverImageHelper.resolveCoverModel` pre-decodes data URIs to a `ByteArray` (cached in a thread-safe LRU) and Coil renders them with `SvgDecoder`.
+- Screen changes are **instant** — no transition animation between the bookshelf, a book, the tabs or the settings.
+- Findings and fix list: `esper-android/docs/bookshelf-findings.md`.
+
 ## Gotchas for Android agents
 - Never full-PUT a notebook you only patched — you will wipe the other client's concurrent pages.
 - `owner_sub: "*"` rows are world-readable legacy/journal rows.

@@ -27,6 +27,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.esper.android.data.model.CanvasEntity
 import com.esper.android.data.model.PageEntity
@@ -101,16 +102,16 @@ fun WorkspaceScreen(
 
     val hasAttachment = attachedCanvas != null
 
-    var isEditorReady by remember { mutableStateOf(false) }
+    // The editor renders immediately - the old 300 ms artificial delay made
+    // every chapter flash a skeleton before the text appeared.
     var isAttachmentReady by remember { mutableStateOf(false) }
 
     LaunchedEffect(activePageIndex, hasAttachment) {
-        isEditorReady = false
         isAttachmentReady = false
-        delay(300)
-        isEditorReady = true
         if (hasAttachment) {
-            delay(300)
+            delay(100)
+            isAttachmentReady = true
+        } else {
             isAttachmentReady = true
         }
     }
@@ -227,8 +228,34 @@ fun WorkspaceScreen(
                             .fillMaxSize()
                             .background(SpaceBlack)
                     ) {
-                        if (!isEditorReady) {
-                            EditorSkeleton()
+                        if (activePage == null) {
+                            // The notebook has no chapters yet. Show an empty
+                            // state instead of a skeleton that would never end.
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.MenuBook,
+                                        contentDescription = null,
+                                        tint = TextMuted,
+                                        modifier = Modifier.size(40.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Text(
+                                        "This notebook has no chapters yet",
+                                        color = TextSecondary,
+                                        fontSize = 14.sp
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        "Add one from the chapters menu",
+                                        color = TextMuted,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
                         } else {
                             activePage?.let { page ->
                                 key(page.id) {
@@ -383,8 +410,28 @@ fun WorkspaceScreen(
                                     .weight(1f)
                                     .background(SpaceBlack)
                             ) {
-                                if (!isEditorReady) {
-                                    EditorSkeleton()
+                                if (activePage == null) {
+                                    // No chapters yet - an empty state, not an
+                                    // endless skeleton.
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Icon(
+                                                Icons.AutoMirrored.Filled.MenuBook,
+                                                contentDescription = null,
+                                                tint = TextMuted,
+                                                modifier = Modifier.size(40.dp)
+                                            )
+                                            Spacer(modifier = Modifier.height(10.dp))
+                                            Text(
+                                                "This notebook has no chapters yet",
+                                                color = TextSecondary,
+                                                fontSize = 14.sp
+                                            )
+                                        }
+                                    }
                                 } else {
                                     activePage?.let { page ->
                                         key(page.id) {

@@ -34,8 +34,8 @@ interface EsperDao {
     @Query("SELECT * FROM notebooks WHERE id = :notebookId")
     suspend fun getNotebookDetails(notebookId: String): NotebookWithDetails?
 
-    @Query("SELECT * FROM pages WHERE id = :pageId")
-    suspend fun getPageById(pageId: String): PageEntity?
+    @Query("SELECT * FROM pages WHERE notebookId = :notebookId AND id = :pageId")
+    suspend fun getPageById(notebookId: String, pageId: String): PageEntity?
 
     @Query("SELECT * FROM notebooks")
     suspend fun getAllNotebooksList(): List<NotebookEntity>
@@ -76,20 +76,20 @@ interface EsperDao {
     @Query("DELETE FROM questions WHERE notebookId = :notebookId")
     suspend fun deleteQuestionsForNotebook(notebookId: String)
 
-    @Query("UPDATE pages SET notes = :notes WHERE id = :pageId")
-    suspend fun updatePageNotes(pageId: String, notes: String)
+    @Query("UPDATE pages SET notes = :notes WHERE notebookId = :notebookId AND id = :pageId")
+    suspend fun updatePageNotes(notebookId: String, pageId: String, notes: String)
 
-    @Query("UPDATE pages SET notes = :notes, title = :title WHERE id = :pageId")
-    suspend fun updatePageNotesAndTitle(pageId: String, notes: String, title: String)
+    @Query("UPDATE pages SET notes = :notes, title = :title WHERE notebookId = :notebookId AND id = :pageId")
+    suspend fun updatePageNotesAndTitle(notebookId: String, pageId: String, notes: String, title: String)
 
     @Query("UPDATE notebooks SET updatedAt = :updatedAt WHERE id = :notebookId")
     suspend fun updateNotebookUpdatedAt(notebookId: String, updatedAt: Long)
 
-    @Query("UPDATE pages SET title = :title WHERE id = :pageId")
-    suspend fun updatePageTitle(pageId: String, title: String)
+    @Query("UPDATE pages SET title = :title WHERE notebookId = :notebookId AND id = :pageId")
+    suspend fun updatePageTitle(notebookId: String, pageId: String, title: String)
 
-    @Query("DELETE FROM pages WHERE id = :pageId OR parentId = :pageId")
-    suspend fun deletePageAndChildren(pageId: String)
+    @Query("DELETE FROM pages WHERE notebookId = :notebookId AND (id = :pageId OR parentId = :pageId)")
+    suspend fun deletePageAndChildren(notebookId: String, pageId: String)
 
     @Query("DELETE FROM pages WHERE notebookId = :notebookId")
     suspend fun deletePagesForNotebook(notebookId: String)

@@ -153,7 +153,7 @@ class MainActivity : ComponentActivity() {
         return try {
             when (op) {
                 is SyncOp.PatchPage -> {
-                    val page = db.dao().getPageById(op.pageId) ?: return true
+                    val page = db.dao().getPageById(op.docId, op.pageId) ?: return true
                     try {
                         api.patchPage(op.docId, op.pageId, mapOf("notes" to page.notes, "title" to page.title))
                     } catch (e: Exception) {
@@ -173,7 +173,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 is SyncOp.CreatePage -> {
-                    val page = db.dao().getPageById(op.pageId) ?: return true
+                    val page = db.dao().getPageById(op.docId, op.pageId) ?: return true
                     try {
                         api.createPage(
                             op.docId,
@@ -275,14 +275,21 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun popScreen() {
-                    if (screenStack.size > 1) {
+                    if (activeEditingQuestion != null) {
+                        // The question editor is not part of the screen stack.
+                        activeEditingQuestion = null
+                    } else if (screenStack.size > 1) {
                         screenStack = screenStack.dropLast(1)
+                        if (screenStack.lastOrNull() != ActiveScreen.WORKSPACE) {
+                            activeNotebookId = null
+                        }
                     } else {
                         screenStack = listOf(ActiveScreen.BOOKSHELF)
+                        activeNotebookId = null
                     }
                 }
 
-                BackHandler(enabled = screenStack.size > 1) {
+                BackHandler(enabled = screenStack.size > 1 || activeEditingQuestion != null) {
                     popScreen()
                 }
 
@@ -719,7 +726,7 @@ class MainActivity : ComponentActivity() {
                                 if (isReadOnly) return@JournalScreen
                                 coroutineScope.launch {
                                     val derivedTitle = deriveChapterTitle(text)
-                                    db.dao().updatePageNotesAndTitle(pageId, text, derivedTitle)
+                                    db.dao().updatePageNotesAndTitle(currentJournalId, pageId, text, derivedTitle)
                                     db.dao().updateNotebookUpdatedAt(currentJournalId, System.currentTimeMillis())
                                     val journalOp = SyncOp.PatchPage(currentJournalId, pageId)
                                     writeQueue.markDirty(journalOp)
@@ -756,7 +763,7 @@ class MainActivity : ComponentActivity() {
                             onDeletePage = { pageId ->
                                 if (isReadOnly) return@JournalScreen
                                 coroutineScope.launch {
-                                    db.dao().deletePageAndChildren(pageId)
+                                    db.dao().deletePageAndChildren(currentJournalId, pageId)
                                     val delOp = SyncOp.DeletePage(currentJournalId, pageId)
                                     writeQueue.markDirty(delOp)
                                     launch(Dispatchers.IO) {
@@ -1133,8 +1140,9 @@ class MainActivity : ComponentActivity() {
                     }
 
                     activeNotebookId != null && currentScreen == ActiveScreen.WORKSPACE -> {
-                        val details by db.dao().observeNotebookDetails(activeNotebookId!!).collectAsState(initial = null)
-                        key(activeNotebookId) {
+                        val workspaceBookId = activeNotebookId!!
+                        val details by db.dao().observeNotebookDetails(workspaceBookId).collectAsState(initial = null)
+                        key(workspaceBookId) {
                             details?.let { book ->
                             WorkspaceScreen(
                                 notebookTitle = book.notebook.title,
@@ -1209,7 +1217,7 @@ class MainActivity : ComponentActivity() {
                                 onDeletePage = { pageId ->
                                     if (isReadOnly) return@WorkspaceScreen
                                     coroutineScope.launch {
-                                        db.dao().deletePageAndChildren(pageId)
+                                        db.dao().deletePageAndChildren(book.notebook.id, pageId)
                                         val delOp = SyncOp.DeletePage(book.notebook.id, pageId)
                                         writeQueue.markDirty(delOp)
                                         launch(Dispatchers.IO) {
@@ -1226,7 +1234,7 @@ class MainActivity : ComponentActivity() {
                                         // Parity with web extractFirstLineTitle: keep sidebar
                                         // title in sync with the first markdown line.
                                         val derivedTitle = deriveChapterTitle(text)
-                                        db.dao().updatePageNotesAndTitle(pageId, text, derivedTitle)
+                                        db.dao().updatePageNotesAndTitle(book.notebook.id, pageId, text, derivedTitle)
                                         db.dao().updateNotebookUpdatedAt(book.notebook.id, System.currentTimeMillis())
                                         val patchOp = SyncOp.PatchPage(book.notebook.id, pageId)
                                         writeQueue.markDirty(patchOp)

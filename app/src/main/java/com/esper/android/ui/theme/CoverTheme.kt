@@ -323,35 +323,61 @@ object CoverThemeEngine {
  */
 object CoverImageHelper {
 
+    /**
+     * Thread-safe LRU cache of resolved cover models.
+     *
+     * Decoding a base64 SVG data URI is expensive (string copies + a base64
+     * decode) and used to happen on the UI thread every time a grid item was
+     * recycled. Caching the decoded [ByteArray] means each unique cover is
+     * decoded exactly once, no matter how often the list scrolls.
+     */
+    private val cacheLock = Any()
+    private val modelCache = object : LinkedHashMap<String, Any>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Any>?): Boolean {
+            return size > 120
+        }
+    }
+
+    /** Drops every cached model (e.g. after a bulk cover refresh). */
+    fun clearCache() {
+        synchronized(cacheLock) {
+            modelCache.clear()
+        }
+    }
+
     fun resolveCoverModel(raw: String?): Any? {
         if (raw.isNullOrBlank()) return null
         val trimmed = raw.trim()
 
-        if (trimmed.startsWith("https://", ignoreCase = true) ||
+        synchronized(cacheLock) {
+            val cached = modelCache[trimmed]
+            if (cached != null) return cached
+        }
+
+        val result: Any? = when {
+            trimmed.startsWith("https://", ignoreCase = true) ||
             trimmed.startsWith("http://", ignoreCase = true)
-        ) {
-            return trimmed
-        }
+            -> trimmed
 
-        if (trimmed.startsWith("<svg", ignoreCase = true) ||
+            trimmed.startsWith("<svg", ignoreCase = true) ||
             trimmed.startsWith("<?xml", ignoreCase = true)
-        ) {
-            return trimmed.toByteArray(Charsets.UTF_8)
+            -> trimmed.toByteArray(Charsets.UTF_8)
+
+            trimmed.startsWith("data:", ignoreCase = true) -> decodeDataUriToBytes(trimmed)
+
+            trimmed.startsWith("PHN2") -> decodeBase64(trimmed)
+
+            trimmed.contains("<svg", ignoreCase = true) -> trimmed.toByteArray(Charsets.UTF_8)
+
+            else -> null
         }
 
-        if (trimmed.startsWith("data:", ignoreCase = true)) {
-            return decodeDataUriToBytes(trimmed)
+        if (result != null) {
+            synchronized(cacheLock) {
+                modelCache[trimmed] = result
+            }
         }
-
-        if (trimmed.startsWith("PHN2")) {
-            return decodeBase64(trimmed)
-        }
-
-        if (trimmed.contains("<svg", ignoreCase = true)) {
-            return trimmed.toByteArray(Charsets.UTF_8)
-        }
-
-        return null
+        return result
     }
 
     fun decodeDataUriToBytes(dataUri: String): ByteArray? {
@@ -362,8 +388,7 @@ object CoverImageHelper {
         val isBase64 = meta.contains(";base64", ignoreCase = true)
 
         return if (isBase64) {
-            val clean = payload.replace("\n", "").replace("\r", "").replace(" ", "").trim()
-            decodeBase64(clean)
+            decodeBase64(payload)
         } else {
             val decoded = percentDecode(payload)
             decoded.toByteArray(Charsets.UTF_8)
@@ -371,7 +396,9 @@ object CoverImageHelper {
     }
 
     internal fun decodeBase64(input: String): ByteArray? {
-        val clean = input.replace("\n", "").replace("\r", "").replace(" ", "").trim()
+        // Single pass instead of chained replace() calls: the old form
+        // allocated three intermediate strings for every cover on every decode.
+        val clean = input.filterNot { it.isWhitespace() }
         return try {
             Base64.getDecoder().decode(clean)
         } catch (_: Exception) {

@@ -18,6 +18,9 @@ data class NotebookEntity(
 
 @Entity(
     tableName = "pages",
+    // Page ids are only unique within a notebook (every web-created book
+    // starts with a page called "p1"), so the key must be composite.
+    primaryKeys = ["notebookId", "id"],
     foreignKeys = [
         ForeignKey(
             entity = NotebookEntity::class,
@@ -29,7 +32,11 @@ data class NotebookEntity(
     indices = [Index("notebookId"), Index("position")]
 )
 data class PageEntity(
-    @PrimaryKey val id: String,
+    // The page id is only unique *within* a notebook: every book created on
+    // the web starts with a page called "p1". A single-column primary key made
+    // Room replace the previous book's row, so all but one of those books lost
+    // their only chapter. The key is therefore (notebookId, id).
+    val id: String,
     val notebookId: String,
     val parentId: String? = null,
     val title: String,

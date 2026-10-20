@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -100,7 +101,12 @@ fun PullToRefreshLayout(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .offset(y = with(density) { (animatedOffset * 0.65f).toDp() })
+                .graphicsLayer {
+                    // A graphics layer keeps the pull offset on the render
+                    // thread. `Modifier.offset` would re-measure and re-place
+                    // the whole lazy grid on every touch frame.
+                    translationY = animatedOffset * 0.65f
+                }
         ) {
             content()
         }
@@ -113,7 +119,9 @@ fun PullToRefreshLayout(
                 border = androidx.compose.foundation.BorderStroke(1.dp, IndigoAccent.copy(alpha = 0.5f)),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .offset(y = with(density) { (animatedOffset * 0.55f).toDp() })
+                    .graphicsLayer {
+                        translationY = animatedOffset * 0.55f
+                    }
                     .padding(top = 10.dp)
             ) {
                 Row(

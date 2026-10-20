@@ -183,7 +183,6 @@ fun TabsScreen(
                                         val coverModel = remember(notebook.coverImage) {
                                             CoverImageHelper.resolveCoverModel(notebook.coverImage)
                                         }
-                                        var isImageLoaded by remember(coverModel) { mutableStateOf(false) }
 
                                         Box(
                                             modifier = Modifier
@@ -197,20 +196,16 @@ fun TabsScreen(
                                                     model = coverModel,
                                                     contentDescription = null,
                                                     contentScale = ContentScale.Crop,
-                                                    onSuccess = { isImageLoaded = true },
-                                                    onError = { isImageLoaded = false },
                                                     modifier = Modifier.fillMaxSize()
                                                 )
-                                                if (isImageLoaded) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .fillMaxSize()
-                                                            .background(Color.Black.copy(alpha = 0.22f))
-                                                    )
-                                                }
-                                            }
-
-                                            if (coverModel == null || !isImageLoaded) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .background(Color.Black.copy(alpha = 0.22f))
+                                                )
+                                            } else {
+                                                // Initial-letter fallback only when there is
+                                                // no artwork - never flashed over a cover.
                                                 Text(
                                                     text = notebook.title.take(1).uppercase(),
                                                     color = Color.White.copy(alpha = 0.85f),

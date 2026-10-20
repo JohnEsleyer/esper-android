@@ -32,13 +32,14 @@ fun BookCard(
     onDelete: () -> Unit = {}
 ) {
     val isReadOnly = LocalReadOnlyMode.current
-    val theme = CoverThemeEngine.getTheme(notebook.coverPreset, notebook.coverImage)
+    val theme = remember(notebook.coverPreset, notebook.coverImage) {
+        CoverThemeEngine.getTheme(notebook.coverPreset, notebook.coverImage)
+    }
     val gradient = theme.gradientColors
 
     val coverModel = remember(notebook.coverImage) {
         CoverImageHelper.resolveCoverModel(notebook.coverImage)
     }
-    var isImageLoaded by remember(coverModel) { mutableStateOf(false) }
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -62,18 +63,14 @@ fun BookCard(
                         model = coverModel,
                         contentDescription = notebook.title,
                         contentScale = ContentScale.Crop,
-                        onSuccess = { isImageLoaded = true },
-                        onError = { isImageLoaded = false },
                         modifier = Modifier.fillMaxSize()
                     )
-                    if (isImageLoaded) {
-                        // Ambient contrast vignette (matches web `bg-black/25`)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.22f))
-                        )
-                    }
+                    // Ambient contrast vignette (matches web `bg-black/25`)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.22f))
+                    )
                 }
 
                 // App-rendered book spine (subtle translucent, artwork stays full-bleed)
@@ -153,8 +150,11 @@ fun BookCard(
                     }
                 }
 
-                // Render title while the cover is absent, loading, or errored
-                if (coverModel == null || !isImageLoaded) {
+                // Render the centered title only when there is no cover artwork
+                // (matches the web contract). When artwork exists it is drawn
+                // over the gradient straight away, so a recycled grid item never
+                // flashes the title on top of the cover.
+                if (coverModel == null) {
                     Text(
                         text = notebook.title,
                         color = TextPrimary,

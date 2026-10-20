@@ -28,10 +28,6 @@ import com.esper.android.ui.theme.*
 
 @Composable
 fun CustomBottomNavBar(
-    currentPage: Int,
-    totalPages: Int,
-    totalBooksCount: Int,
-    onPageSelected: (Int) -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenJournal: () -> Unit,
     onOpenTabs: () -> Unit,
@@ -40,7 +36,6 @@ fun CustomBottomNavBar(
     modifier: Modifier = Modifier
 ) {
     val isReadOnly = LocalReadOnlyMode.current
-    var pageInputText by remember(currentPage) { mutableStateOf(currentPage.toString()) }
 
     Surface(
         color = CosmicSlate,
@@ -50,103 +45,6 @@ fun CustomBottomNavBar(
             .navigationBarsPadding()
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FilledTonalIconButton(
-                    onClick = {
-                        if (currentPage > 1) onPageSelected(currentPage - 1)
-                    },
-                    enabled = currentPage > 1,
-                    colors = IconButtonDefaults.filledTonalIconButtonColors(
-                        containerColor = SurfaceSlate,
-                        disabledContainerColor = CosmicSlate
-                    ),
-                    modifier = Modifier.size(34.dp)
-                ) {
-                    Icon(
-                        Icons.Default.ChevronLeft,
-                        contentDescription = "Previous Page",
-                        tint = if (currentPage > 1) TextPrimary else TextMuted
-                    )
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Text("Page", color = TextMuted, fontSize = 12.sp)
-                    Spacer(modifier = Modifier.width(6.dp))
-
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = SpaceBlack,
-                        border = BorderStroke(1.dp, BorderSlate),
-                        modifier = Modifier
-                            .width(46.dp)
-                            .height(28.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            BasicTextField(
-                                value = pageInputText,
-                                onValueChange = { input ->
-                                    val filtered = input.filter { it.isDigit() }.take(3)
-                                    pageInputText = filtered
-                                },
-                                singleLine = true,
-                                textStyle = TextStyle(
-                                    color = IndigoGlow,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    textAlign = TextAlign.Center
-                                ),
-                                keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Number,
-                                    imeAction = ImeAction.Done
-                                ),
-                                keyboardActions = KeyboardActions(
-                                    onDone = {
-                                        val num = pageInputText.toIntOrNull() ?: 1
-                                        val clamped = num.coerceIn(1, maxOf(1, totalPages))
-                                        pageInputText = clamped.toString()
-                                        onPageSelected(clamped)
-                                    }
-                                ),
-                                cursorBrush = SolidColor(IndigoAccent),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("of $totalPages ($totalBooksCount books)", color = TextMuted, fontSize = 12.sp)
-                }
-
-                FilledTonalIconButton(
-                    onClick = {
-                        if (currentPage < totalPages) onPageSelected(currentPage + 1)
-                    },
-                    enabled = currentPage < totalPages,
-                    colors = IconButtonDefaults.filledTonalIconButtonColors(
-                        containerColor = SurfaceSlate,
-                        disabledContainerColor = CosmicSlate
-                    ),
-                    modifier = Modifier.size(34.dp)
-                ) {
-                    Icon(
-                        Icons.Default.ChevronRight,
-                        contentDescription = "Next Page",
-                        tint = if (currentPage < totalPages) TextPrimary else TextMuted
-                    )
-                }
-            }
-
-            HorizontalDivider(color = BorderSlate.copy(alpha = 0.5f), thickness = 1.dp)
-
             NavigationBar(
                 containerColor = CosmicSlate,
                 modifier = Modifier.height(58.dp)

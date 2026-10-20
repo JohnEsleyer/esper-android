@@ -6,6 +6,12 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+// Export the Room schema so the database contract (notably the composite
+// primary key of the `pages` table) is reviewable and assertable in tests.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 android {
     namespace = "com.esper.android"
     compileSdk = 35
@@ -67,7 +73,6 @@ dependencies {
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
-
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
 

@@ -80,9 +80,6 @@ fun BookshelfScreen(
     var bookToDelete by remember { mutableStateOf<NotebookEntity?>(null) }
     var shelfToDelete by remember { mutableStateOf<ShelfEntity?>(null) }
 
-    val pageSize = 6
-    var currentPage by remember { mutableIntStateOf(1) }
-
     // Books are strictly ordered latest to oldest; journal records (legacy
     // "esper-journal" and per-user "esper-journal-<uid>") are standalone
     // workspaces and never clutter the bookshelf grid.
@@ -90,27 +87,42 @@ fun BookshelfScreen(
         notebooks.filter { !it.id.startsWith("esper-journal") }.sortedByDescending { it.updatedAt }
     }
 
-    val filtered = remember(sortedNotebooks, selectedTagFilter, searchQuery, selectedShelfId, shelves) {
-        sortedNotebooks.filter { book ->
-            val tagMatches = selectedTagFilter == "All" || book.tagsCsv.contains(selectedTagFilter, ignoreCase = true)
-            val searchMatches = searchQuery.isBlank() || book.title.contains(searchQuery, ignoreCase = true)
-            val shelfMatches = selectedShelfId == null || shelves.find { it.id == selectedShelfId }?.notebookIdsCsv?.contains(book.id) == true
-            tagMatches && searchMatches && shelfMatches
-        }
+    val currentShelf = remember(shelves, selectedShelfId) {
+        shelves.find { it.id == selectedShelfId }
     }
 
-    val totalPages = remember(filtered) {
-        maxOf(1, ceil(filtered.size.toDouble() / pageSize).toInt())
+    // Exact membership set. The previous implementation used
+    // `notebookIdsCsv.contains(book.id)`, a substring match over the joined
+    // CSV, so "book-1" also matched a shelf containing "book-10".
+    val shelfBookIds = remember(currentShelf) {
+        BookshelfFiltering.shelfBookIds(currentShelf)
     }
 
-    LaunchedEffect(totalPages) {
-        if (currentPage > totalPages) currentPage = totalPages
+    // A stale / deleted shelf id must not blank the whole bookshelf: fall back
+    // to "no shelf filter" instead of matching nothing.
+    val shelfFilterActive = selectedShelfId != null && currentShelf != null
+
+    val filtered = remember(
+        sortedNotebooks,
+        selectedTagFilter,
+        searchQuery,
+        shelfFilterActive,
+        shelfBookIds
+    ) {
+        BookshelfFiltering.filter(
+            books = sortedNotebooks,
+            tagFilter = selectedTagFilter,
+            searchQuery = searchQuery,
+            shelfBookIds = shelfBookIds,
+            shelfFilterActive = shelfFilterActive
+        )
     }
 
-    val pagedBooks = remember(filtered, currentPage) {
-        val startIndex = (currentPage - 1) * pageSize
-        filtered.drop(startIndex).take(pageSize)
-    }
+    // No manual pagination: the grid below is a LazyVerticalGrid, so it
+    // virtualises the whole library and the user scrolls through every book.
+    // The old 6-books-per-page pager hid books behind a thin strip at the very
+    // bottom of the screen - a book that happened to sort last (for example
+    // the only one without an artwork) looked like it did not exist at all.
 
     fun triggerRefresh() {
         if (!isRefreshing) {
@@ -200,6 +212,7 @@ fun BookshelfScreen(
                                     .fillMaxWidth()
                                     .clickable {
                                         selectedShelfId = null
+                                        onSelectTagFilter("All")
                                         coroutineScope.launch { drawerState.close() }
                                     }
                             ) {
@@ -228,7 +241,13 @@ fun BookshelfScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
+                                        // Selecting a shelf clears the tag
+                                        // filter: the two filters are
+                                        // mutually exclusive, so a shelf never
+                                        // renders as the intersection of two
+                                        // unrelated selections.
                                         selectedShelfId = s.id
+                                        onSelectTagFilter("All")
                                         coroutineScope.launch { drawerState.close() }
                                     }
                             ) {
@@ -324,7 +343,6 @@ fun BookshelfScreen(
                                         value = searchQuery,
                                         onValueChange = {
                                             searchQuery = it
-                                            currentPage = 1
                                         },
                                         singleLine = true,
                                         textStyle = TextStyle(
@@ -363,11 +381,14 @@ fun BookshelfScreen(
             },
             bottomBar = {
                 CustomBottomNavBar(
-                    currentPage = currentPage,
-                    totalPages = totalPages,
-                    totalBooksCount = filtered.size,
-                    onPageSelected = { currentPage = it },
-                    onOpenLibrary = { onSelectTagFilter("All") },
+                    onOpenLibrary = {
+                        // The Library tab must always land on the complete,
+                        // unfiltered bookshelf - it used to clear only the tag
+                        // filter, leaving the shelf filter in place.
+                        selectedShelfId = null
+                        onSelectTagFilter("All")
+                        searchQuery = ""
+                    },
                     onOpenJournal = onOpenJournalScreen,
                     onOpenTabs = onOpenTabsScreen,
                     onOpenCreateBook = onOpenCreateNotebookScreen,
@@ -417,9 +438,14 @@ fun BookshelfScreen(
                         }
 
                         items(quickTags) { tag ->
-                            val isSelected = tag == selectedTagFilter
+                            val isSelected = tag == selectedTagFilter && selectedShelfId == null
                             Surface(
-                                onClick = { onSelectTagFilter(tag) },
+                                onClick = {
+                                    // Selecting a tag clears the shelf filter
+                                    // for the same reason as above.
+                                    selectedShelfId = null
+                                    onSelectTagFilter(tag)
+                                },
                                 shape = RoundedCornerShape(20.dp),
                                 color = if (isSelected) IndigoAccent else CosmicSlate
                             ) {
@@ -435,9 +461,7 @@ fun BookshelfScreen(
                     }
 
                     // Prominent shelf heading: what shelf am I in?
-                    val currentShelf = remember(shelves, selectedShelfId) {
-                        shelves.find { it.id == selectedShelfId }
-                    }
+                    // `currentShelf` is resolved once at the top of the screen.
                     val shelfTitle = currentShelf?.title ?: "All Notebooks"
                     val shelfColor = remember(currentShelf) {
                         try {
@@ -478,9 +502,16 @@ fun BookshelfScreen(
                                     modifier = Modifier.padding(start = 18.dp)
                                 )
                             }
-                            if (selectedShelfId != null) {
+                            if (selectedShelfId != null || selectedTagFilter != "All" || searchQuery.isNotEmpty()) {
                                 TextButton(
-                                    onClick = { selectedShelfId = null },
+                                    onClick = {
+                                        // Clears every filter at once so the
+                                        // button always means "show me the
+                                        // whole library".
+                                        selectedShelfId = null
+                                        onSelectTagFilter("All")
+                                        searchQuery = ""
+                                    },
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                 ) {
                                     Text("Clear filter", color = IndigoGlow, fontSize = 11.sp)
@@ -489,7 +520,7 @@ fun BookshelfScreen(
                         }
                     }
 
-                    if (pagedBooks.isEmpty()) {
+                    if (filtered.isEmpty()) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -511,7 +542,7 @@ fun BookshelfScreen(
                             verticalArrangement = Arrangement.spacedBy(16.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            items(pagedBooks, key = { it.id }) { book ->
+                            items(filtered, key = { it.id }) { book ->
                                 BookCard(
                                     notebook = book,
                                     onClick = { onOpenNotebook(book.id) },
