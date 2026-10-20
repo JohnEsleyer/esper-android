@@ -25,7 +25,11 @@ data class LexicalQuoteNode(
 data class LexicalCodeBlockNode(
     override val key: String,
     val code: String,
-    val language: String = "markdown"
+    val language: String = "markdown",
+    /** Line index of the opening fence inside the source markdown. */
+    val lineStartIndex: Int = 0,
+    /** Line index of the closing fence inside the source markdown. */
+    val lineEndIndex: Int = 0
 ) : LexicalBlockNode()
 
 data class LexicalMathBlockNode(

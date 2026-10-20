@@ -1,5 +1,8 @@
 package com.esper.android.ui.lexical
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.*
@@ -70,6 +73,75 @@ sealed interface LexicalAction {
     object AddDivider : LexicalAction
 }
 
+/**
+ * Matches the `/code` slash command, optionally with a language tag
+ * (`/code python`).
+ */
+private val SLASH_CODE_REGEX = Regex("^/code(?:\\s+([a-zA-Z0-9_+#.-]+))?$")
+
+/**
+ * Expands a `/code` (or `/code <language>`) line into a fenced code block.
+ *
+ * The block is created with an empty content line — the caret lands there so
+ * the user can type the code straight away — and an escape paragraph is added
+ * below the closing fence so the cursor can always leave the block again.
+ *
+ * Returns `null` when the text before the caret is not a slash command.
+ */
+internal fun expandSlashCode(fresh: TextFieldValue): TextFieldValue? {
+    val text = fresh.text
+    val cursorPos = fresh.selection.start
+    if (cursorPos < 5) return null
+
+    // Only the current line is considered: "/code" must be the whole line.
+    val lineStart = text.lastIndexOf('\n', (cursorPos - 1).coerceAtLeast(0)) + 1
+    val lineSegment = text.substring(lineStart, cursorPos)
+
+    val match = SLASH_CODE_REGEX.matchEntire(lineSegment.trim()) ?: return null
+
+    val language = match.groupValues.getOrNull(1)?.ifBlank { null } ?: "cpp"
+    val prefix = text.substring(0, lineStart)
+    val suffix = text.substring(cursorPos)
+
+    // ```lang, an empty content line, the closing fence and an escape line.
+    val insert = "```$language\n\n```\n\n"
+    val newText = prefix + insert + suffix
+    val cursorTarget = prefix.length + "```$language\n".length
+    return TextFieldValue(newText, TextRange(cursorTarget))
+}
+
+/**
+ * True when [text] ends with a fence that actually *closes* a code block.
+ *
+ * An even number of fence lines means the last one closes a block, so an
+ * opening fence that the user is still typing is left alone.
+ */
+internal fun endsWithClosedFence(text: String): Boolean {
+    if (text.isEmpty() || text.endsWith("\n")) return false
+    if (text.substringAfterLast('\n').trim() != "```") return false
+    val fenceCount = text.lines().count { it.trim().startsWith("```") }
+    return fenceCount % 2 == 0
+}
+
+/**
+ * Guarantees an escape paragraph below a code block that was typed by hand.
+ *
+ * When the markdown ends with a closing fence the caret would otherwise be
+ * stuck on the fence line; appending a blank line gives the user somewhere to
+ * write normal text again.
+ */
+internal fun ensureEscapeParagraph(fresh: TextFieldValue): TextFieldValue {
+    if (!endsWithClosedFence(fresh.text)) return fresh
+    val newText = fresh.text + "\n\n"
+    return TextFieldValue(newText, TextRange(newText.length))
+}
+
+/**
+ * `String.lines()` drops a trailing newline; this keeps it so a rewrite of
+ * the markdown never silently drops the final line break.
+ */
+private fun trailingNewlineOf(text: String): String = if (text.endsWith("\n")) "\n" else ""
+
 @Composable
 fun ComposeLexicalEditor(
     initialMarkdown: String,
@@ -133,6 +205,35 @@ fun ComposeLexicalEditor(
         rawText = text
         blocks = LexicalParser.parseToLexicalAst(text)
         fieldValue = TextFieldValue(text, TextRange(text.length))
+    }
+
+    /** Removes a code block — fence included — from the raw markdown. */
+    fun deleteCodeBlock(block: LexicalCodeBlockNode) {
+        if (readOnly) return
+        val lines = rawText.lines()
+        val start = block.lineStartIndex
+        if (start !in lines.indices) return
+        val end = block.lineEndIndex.coerceIn(start, lines.size - 1)
+        val newLines = lines.toMutableList()
+        newLines.subList(start, end + 1).clear()
+        val newText = newLines.joinToString("\n") + trailingNewlineOf(rawText)
+        commitText(newText)
+        fieldValue = TextFieldValue(newText, TextRange(newText.length))
+    }
+
+    /** Rewrites the fence tag of a code block, e.g. ```python -> ```cpp. */
+    fun changeCodeLanguage(block: LexicalCodeBlockNode, language: String) {
+        if (readOnly) return
+        val lines = rawText.lines()
+        val index = block.lineStartIndex
+        if (index !in lines.indices) return
+        val fence = lines[index]
+        val indent = fence.takeWhile { it == ' ' || it == '\t' }
+        val newLines = lines.toMutableList()
+        newLines[index] = indent + "```" + language
+        val newText = newLines.joinToString("\n") + trailingNewlineOf(rawText)
+        commitText(newText)
+        fieldValue = TextFieldValue(newText, TextRange(newText.length))
     }
 
     // Synchronize external markdown changes (Room re-emissions) without ever
@@ -233,8 +334,12 @@ fun ComposeLexicalEditor(
                                 // Keep the IME's own value (text + selection)
                                 // exactly as delivered; only then mirror the
                                 // text into rawText/blocks and save.
-                                fieldValue = fresh
-                                commitText(fresh.text)
+                                // `/code` is expanded into a real code block
+                                // first, and a freshly closed fence gets an
+                                // escape paragraph underneath.
+                                val processed = expandSlashCode(fresh) ?: ensureEscapeParagraph(fresh)
+                                fieldValue = processed
+                                commitText(processed.text)
                             }
                         },
                         readOnly = readOnly,
@@ -277,7 +382,10 @@ fun ComposeLexicalEditor(
                         LexicalBlockRenderer(
                             block = block,
                             onTimestampClicked = onTimestampClicked,
-                            onToggleTask = { _ -> }
+                            onToggleTask = { _ -> },
+                            readOnly = readOnly,
+                            onDeleteCodeBlock = { deleteCodeBlock(it) },
+                            onChangeCodeLanguage = { target, language -> changeCodeLanguage(target, language) }
                         )
                     }
                 }
@@ -290,7 +398,10 @@ fun ComposeLexicalEditor(
 fun LexicalBlockRenderer(
     block: LexicalBlockNode,
     onTimestampClicked: (Int) -> Unit,
-    onToggleTask: (Boolean) -> Unit
+    onToggleTask: (Boolean) -> Unit,
+    readOnly: Boolean = false,
+    onDeleteCodeBlock: (LexicalCodeBlockNode) -> Unit = { },
+    onChangeCodeLanguage: (LexicalCodeBlockNode, String) -> Unit = { _, _ -> }
 ) {
     when (block) {
         is LexicalHeadingNode -> {
@@ -375,42 +486,12 @@ fun LexicalBlockRenderer(
         }
 
         is LexicalCodeBlockNode -> {
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = Color(0xFF030712),
-                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSlate),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = block.language.uppercase(),
-                            color = IndigoGlow,
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Icon(
-                            Icons.Default.ContentCopy,
-                            contentDescription = "Code",
-                            tint = TextMuted,
-                            modifier = Modifier.size(13.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = block.code,
-                        color = Color(0xFFE0E7FF),
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        lineHeight = 18.sp
-                    )
-                }
-            }
+            LexicalCodeBlock(
+                block = block,
+                readOnly = readOnly,
+                onDeleteCodeBlock = onDeleteCodeBlock,
+                onChangeCodeLanguage = onChangeCodeLanguage
+            )
         }
 
         is LexicalListItemNode -> {
@@ -622,6 +703,139 @@ fun LexicalInlineContent(
     }
 }
 
+/**
+ * Renders a fenced code block with syntax highlighting, a language badge
+ * that doubles as a picker, a copy button and a delete button.
+ */
+@Composable
+private fun LexicalCodeBlock(
+    block: LexicalCodeBlockNode,
+    readOnly: Boolean,
+    onDeleteCodeBlock: (LexicalCodeBlockNode) -> Unit,
+    onChangeCodeLanguage: (LexicalCodeBlockNode, String) -> Unit
+) {
+    val context = LocalContext.current
+    var copied by remember(block.key) { mutableStateOf(false) }
+    var isLanguageMenuOpen by remember(block.key) { mutableStateOf(false) }
+
+    // Reset the "Copied!" confirmation a couple of seconds after the tap.
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(2000)
+            copied = false
+        }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = Color(0xFF030712),
+        border = androidx.compose.foundation.BorderStroke(1.dp, BorderSlate),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Language badge — tapping it opens the language picker.
+                Box {
+                    Text(
+                        text = CodeSyntaxHighlighter.displayLanguageName(block.language),
+                        color = IndigoGlow,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable(enabled = !readOnly) { isLanguageMenuOpen = true }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                    DropdownMenu(
+                        expanded = isLanguageMenuOpen,
+                        onDismissRequest = { isLanguageMenuOpen = false }
+                    ) {
+                        CodeSyntaxHighlighter.SUPPORTED_LANGUAGES.forEach { (value, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label, fontSize = 13.sp) },
+                                onClick = {
+                                    isLanguageMenuOpen = false
+                                    onChangeCodeLanguage(block, value)
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Copy the block to the clipboard.
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable {
+                                val clipboard =
+                                    context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("code", block.code))
+                                copied = true
+                            }
+                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                    ) {
+                        if (copied) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = "Copied",
+                                    tint = Color(0xFF34D399),
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = "Copied!",
+                                    color = Color(0xFF34D399),
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        } else {
+                            Icon(
+                                Icons.Default.ContentCopy,
+                                contentDescription = "Copy code",
+                                tint = TextMuted,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                    }
+
+                    if (!readOnly) {
+                        // Remove the whole block from the note.
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { onDeleteCodeBlock(block) }
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Delete code block",
+                                tint = TextMuted,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = CodeSyntaxHighlighter.highlight(block.code, block.language),
+                color = Color(0xFFE0E7FF),
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                lineHeight = 18.sp
+            )
+        }
+    }
+}
+
 @Composable
 fun LexicalToolbar(
     isRawMode: Boolean,
@@ -720,7 +934,9 @@ private fun applyAction(content: String, action: LexicalAction): String {
         LexicalAction.AddNestedBulletList -> "$content\n  - Nested sub-item"
         LexicalAction.AddChecklist -> "$content\n- [ ] Unfinished task\n- [x] Verified item"
         LexicalAction.AddTable -> "$content\n| Parameter | Value | Unit |\n|---|---|---|\n| Semi-Major Axis (a) | 1.496e8 | km |\n| Eccentricity (e) | 0.0167 | - |\n"
-        LexicalAction.AddCodeBlock -> "$content\n```python\ndef orbital_period(a, mu):\n    return 2 * math.pi * math.sqrt(a**3 / mu)\n```"
+        // The trailing blank line is the escape paragraph: it lets the user
+        // step out of the code block and keep writing normal notes.
+        LexicalAction.AddCodeBlock -> "$content\n```python\ndef orbital_period(a, mu):\n    return 2 * math.pi * math.sqrt(a**3 / mu)\n```\n\n"
         LexicalAction.AddQuote -> "$content\n> Conservation of angular momentum yields constant areal velocity."
         LexicalAction.AddTimestamp -> "$content [00:15]"
         LexicalAction.AddDivider -> "$content\n---\n"

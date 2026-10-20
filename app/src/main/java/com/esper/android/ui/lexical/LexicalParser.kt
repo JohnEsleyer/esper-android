@@ -48,6 +48,7 @@ object LexicalParser {
 
             // 2. Code Block: ```
             if (trimmed.startsWith("```")) {
+                val startLine = i
                 val lang = trimmed.removePrefix("```").trim().ifEmpty { "text" }
                 val codeLines = mutableListOf<String>()
                 i++
@@ -55,11 +56,15 @@ object LexicalParser {
                     codeLines.add(lines[i])
                     i++
                 }
+                // `i` now points at the closing fence (or past the last line).
+                val endLine = i
                 blocks.add(
                     LexicalCodeBlockNode(
                         key = UUID.randomUUID().toString(),
                         code = codeLines.joinToString("\n"),
-                        language = lang
+                        language = lang,
+                        lineStartIndex = startLine,
+                        lineEndIndex = endLine
                     )
                 )
                 i++
