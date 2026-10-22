@@ -4,7 +4,7 @@
 > Android client needs to know about the web + backend repo. If you change
 > main-repo code that alters anything described here, update this file in the
 > same change (see `docs/contributing.md`).
-> Last verified: 2026-10-20. Covers post-encryption-removal state + SVG cover contract + per-user journal id + code block parity.
+> Last verified: 2026-10-22. Covers post-encryption-removal state + SVG cover contract + per-user journal id + code block parity + in-block language picker.
 
 ## Identity
 - Repo `022-esper`: React 19 SPA (`src/`, Cloudflare Pages) + Rust Axum API (`server/`, VPS via Skiff) + SurrealDB v3.x (`surrealkv`). API origin `https://esper-api.johnesleyer.com`, local `http://127.0.0.1:8080`.
@@ -36,11 +36,12 @@
 
 ## Web frontend map (`src/`)
 - `App.jsx` (state, sync, tabs/shelves/tags), `components/WorkspaceView.jsx`, `components/MarkdownEditor.jsx` (Lexical + Prism highlight + `/code` slash command + per-block copy/delete + language picker), `components/CodeEditor.jsx`, drawers/modals in `components/*/`, `services/api.js` (fetch/save/patch, guest-token via `sessionStorage`), `services/firebase.js` (Google popup sign-in), `services/bookImporter.js` (ZIP/`.esper` import), `services/zipExport.js`, `constants/presets.js` (API base resolution, `normalizeDoc`, ID helpers).
-- Editor themes `editor-dark/editor-light` in `src/index.css`; code blocks `.editor-code-block` with `data-highlight-language` badge.
-- Code-block language tags: the stock `@lexical/markdown` transformer only captures `\w+`, so ```` ```C++ ```` used to parse as the language `C`. Esper replaces it with `src/components/nodes/CodeBlockTransformer.js` (accepts `+`/`#`) and resolves every alias/casing via `src/services/prismSetup.js` (`C++`→`cpp`, `py`→`python`, `C#`→`csharp`, …). Prism is **not** imported directly by app code — the single instance bundled inside `@lexical/code` is reused, otherwise the highlighter and the alias table would end up on two disconnected copies.
+- Editor themes `editor-dark/editor-light` in `src/index.css`; code blocks `.editor-code-block` carry `data-highlight-language`, and the language badge is rendered by the editor overlay (not by a CSS pseudo element).
+- Code-block language tags: the stock `@lexical/markdown` transformer only captures `\w+`, so ```` ```C++ ```` used to parse as the language `C`. Esper replaces it with `src/components/nodes/CodeBlockTransformer.js` (accepts `+`/`#`) and resolves every alias/casing via `src/services/prismSetup.js` (`C++`→`cpp`, `py`→`python`, `C#`→`csharp`, `php8`→`php`, …). Prism is **not** imported directly by app code — the single instance bundled inside `@lexical/code` is reused, otherwise the highlighter and the alias table would end up on two disconnected copies.
+- Web-only grammars (hand-written in `prismSetup.js`, **not** ported to the Kotlin highlighter yet): `bash`, `json`, `yaml`, `go`, `csharp`, `kotlin`, `php`, `ruby`, `lua`, `docker`, `diff`, `graphql`. A block using one of them highlights on web and falls back to plain text on Android.
 
 ## Code blocks (web ⇄ Android parity)
-- Web: fenced blocks are parsed by `CodeBlockTransformer.js`, highlighted by Prism, and get a language badge, copy + trash buttons and a language picker. `/code` (or `/code <lang>`) expands into a block instantly, and every new block is followed by an escape paragraph.
+- Web: fenced blocks are parsed by `CodeBlockTransformer.js`, highlighted by Prism, and get copy + trash buttons plus a **language picker rendered inside the block** (top-left corner, `CodeBlockActionsOverlay` in `components/MarkdownEditor.jsx`). The picker writes straight to that block's `CodeNode.setLanguage(...)`, so Prism re-tokenises it immediately and the change is persisted into the markdown fence (` ```python `). In read-only mode the picker degrades to a static badge and the trash button is hidden. `/code` (or `/code <lang>`) expands into a block instantly, and every new block is followed by an escape paragraph.
 - Android: `ui/lexical/CodeSyntaxHighlighter.kt` is a dependency-free Kotlin port of the same grammars, using the exact `editor-dark` token colours so both clients look identical. `ui/lexical/LexicalParser.kt` captures the language tag verbatim and records the fence line range so the block can be deleted or re-tagged in the raw markdown. `/code`, the escape-paragraph rule, copy/trash and the language picker live in `ui/lexical/ComposeLexicalEditor.kt`.
 - Contract: both clients read the same markdown, so a block written on one renders highlighted on the other. Findings and the resolution log: `esper-android/docs/code-blocks-findings.md`.
 
