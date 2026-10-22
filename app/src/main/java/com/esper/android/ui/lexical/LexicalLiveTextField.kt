@@ -1,0 +1,537 @@
+package com.esper.android.ui.lexical
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.esper.android.ui.theme.BorderSlate
+import com.esper.android.ui.theme.IndigoAccent
+import com.esper.android.ui.theme.IndigoGlow
+import com.esper.android.ui.theme.SpaceBlack
+import com.esper.android.ui.theme.SurfaceSlate
+import com.esper.android.ui.theme.TextMuted
+import com.esper.android.ui.theme.TextPrimary
+import com.esper.android.ui.theme.TextSecondary
+
+/**
+ * Makes a plain text field behave like a rendered editor:
+ *
+ *  * markdown markers (`**`, `*`, `` ` ``, `~~`, `$`, `[ ](…)`, `:shortcode:`)
+ *    are hidden and replaced by the formatting they describe;
+ *  * the markers of the construct the caret sits in are revealed and dimmed so
+ *    the document is still editable;
+ *  * the mapping between stored offsets and displayed offsets is exact, so
+ *    tapping and cursor movement land where the user expects.
+ */
+class InlineMarkdownTransformation(
+    private val caret: Int,
+    private val base: SpanStyle,
+    private val colors: LexicalInlineColors
+) : VisualTransformation {
+
+    override fun filter(text: AnnotatedString): TransformedText {
+        val raw = text.text
+        val scan = LexicalInline.scan(raw)
+        val builder = AnnotatedString.Builder()
+        val rawToDisplay = IntArray(raw.length + 1)
+        var display = 0
+        var rawCursor = 0
+
+        scan.spans.forEach { span ->
+            // Defensive: if the token stream ever leaves a gap, keep it literal.
+            while (rawCursor < span.rawStart) {
+                rawToDisplay[rawCursor] = display
+                builder.append(raw[rawCursor])
+                display++
+                rawCursor++
+            }
+
+            val hidden = span.kind == LexicalInlineKind.MARKER && !isRevealed(span)
+            val tokenLength = span.text.length
+            val rawLength = (span.rawEnd - span.rawStart).coerceAtLeast(0)
+
+            if (!hidden) {
+                val style = styleFor(span)
+                builder.withStyle(style) { append(span.text) }
+                for (offset in 0 until rawLength) {
+                    rawToDisplay[span.rawStart + offset] =
+                        if (rawLength == tokenLength) display + offset
+                        else display + (offset * tokenLength / rawLength)
+                }
+                display += tokenLength
+            } else {
+                for (offset in 0 until rawLength) {
+                    rawToDisplay[span.rawStart + offset] = display
+                }
+            }
+            rawCursor = span.rawEnd
+        }
+
+        while (rawCursor < raw.length) {
+            rawToDisplay[rawCursor] = display
+            builder.append(raw[rawCursor])
+            display++
+            rawCursor++
+        }
+        rawToDisplay[raw.length] = display
+
+        // Reverse map: whichever raw offset last lands on a display offset wins,
+        // which puts the caret just *after* a hidden marker.
+        val displayToRaw = IntArray(display + 1)
+        for (offset in 0..raw.length) {
+            displayToRaw[rawToDisplay[offset].coerceIn(0, display)] = offset
+        }
+
+        return TransformedText(
+            builder.toAnnotatedString(),
+            object : OffsetMapping {
+                override fun originalToTransformed(offset: Int): Int =
+                    rawToDisplay[offset.coerceIn(0, raw.length)]
+
+                override fun transformedToOriginal(offset: Int): Int =
+                    displayToRaw[offset.coerceIn(0, display)]
+            }
+        )
+    }
+
+    private fun isRevealed(span: LexicalInlineSpan): Boolean =
+        caret >= span.constructStart && caret < span.constructEnd
+
+    private fun styleFor(span: LexicalInlineSpan): SpanStyle = when (span.kind) {
+        LexicalInlineKind.MARKER -> SpanStyle(
+            color = colors.muted.copy(alpha = 0.65f),
+            fontWeight = FontWeight.Normal
+        )
+        LexicalInlineKind.CODE -> SpanStyle(
+            color = colors.code,
+            background = colors.codeBackground,
+            fontFamily = FontFamily.Monospace,
+            fontSize = scaledTextSize(base.fontSize, 0.92f)
+        )
+        LexicalInlineKind.MATH -> SpanStyle(
+            color = colors.math,
+            background = colors.mathBackground,
+            fontFamily = FontFamily.Monospace,
+            fontSize = scaledTextSize(base.fontSize, 0.9f)
+        )
+        LexicalInlineKind.LINK -> SpanStyle(
+            color = colors.link,
+            textDecoration = TextDecoration.Underline
+        )
+        LexicalInlineKind.TIMESTAMP -> SpanStyle(
+            color = colors.timestamp,
+            background = colors.timestampBackground,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            fontSize = scaledTextSize(base.fontSize, 0.85f)
+        )
+        LexicalInlineKind.EMOJI -> SpanStyle(fontSize = scaledTextSize(base.fontSize, 1.05f))
+        else -> SpanStyle(
+            color = when {
+                span.url != null -> colors.link
+                span.code -> colors.code
+                else -> Color.Unspecified
+            },
+            fontWeight = if (span.bold) FontWeight.Bold else null,
+            fontStyle = if (span.italic) FontStyle.Italic else null,
+            textDecoration = when {
+                span.url != null -> TextDecoration.Underline
+                span.strike -> TextDecoration.LineThrough
+                else -> null
+            },
+            background = if (span.highlight) colors.highlightBackground else Color.Unspecified,
+            fontFamily = if (span.code) FontFamily.Monospace else null
+        )
+    }
+}
+
+/** Syntax highlighting applied behind an editable code block. */
+class CodeHighlightTransformation(private val language: String) : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText =
+        TransformedText(
+            CodeSyntaxHighlighter.highlight(text.text, language),
+            OffsetMapping.Identity
+        )
+}
+
+/**
+ * One live `:shortcode` query plus the callback that replaces it in the field
+ * that raised it.
+ *
+ * The field cannot render its own suggestion strip: the strip belongs *below*
+ * the whole list so the soft keyboard never covers it, and a field near the
+ * bottom of a note would otherwise push its own suggestions off-screen.
+ */
+class EmojiSuggestionState internal constructor(
+    val query: String,
+    internal val insert: (String) -> Unit
+)
+
+/**
+ * Editor-scoped bridge between the focused field and the suggestion strip.
+ *
+ * The field publishes whatever `:prefix` the caret is in, the editor renders
+ * the strip, and picking an entry calls back into that same field — so the
+ * insertion happens at the caret even though the UI lives somewhere else.
+ */
+class EmojiSuggestionHost {
+    internal var current by mutableStateOf<EmojiSuggestionState?>(null)
+        private set
+
+    internal fun show(query: String, insert: (String) -> Unit) {
+        current = EmojiSuggestionState(query, insert)
+    }
+
+    internal fun hide() {
+        current = null
+    }
+}
+
+/**
+ * A text field that renders markdown (or syntax-highlighted code) live.
+ *
+ * The field owns its text while focused so the IME is never fought, and falls
+ * back to the authoritative block text when focus leaves. Pressing Enter on a
+ * paragraph splits the block (two Enters make a new paragraph); inside a code
+ * block Enter simply adds a line.
+ */
+@Composable
+fun LiveTextField(
+    block: LexicalBlockNode,
+    initialText: String,
+    textStyle: TextStyle,
+    spanBase: SpanStyle,
+    colors: LexicalInlineColors,
+    readOnly: Boolean,
+    requestFocus: Boolean,
+    onFocusConsumed: () -> Unit,
+    onTextCommitted: (String) -> Unit,
+    onSplit: (String, Int) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String? = null,
+    useMarkdown: Boolean = true,
+    codeLanguage: String? = null,
+    showEmojiPicker: Boolean = true,
+    suggestions: EmojiSuggestionHost? = null,
+    initialCaret: Int? = null,
+    onFocusLost: () -> Unit = {}
+) {
+    var value by remember(block.key) {
+        val caret = (initialCaret ?: initialText.length).coerceIn(0, initialText.length)
+        mutableStateOf(TextFieldValue(initialText, TextRange(caret)))
+    }
+    var isFocused by remember(block.key) { mutableStateOf(false) }
+    var wasFocused by remember(block.key) { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    // Follow external edits (sync, undo, toolbar) only when the user is not
+    // typing in this field.
+    LaunchedEffect(initialText) {
+        if (!isFocused && value.text != initialText) {
+            value = TextFieldValue(initialText, TextRange(initialText.length))
+        }
+    }
+
+    LaunchedEffect(requestFocus) {
+        if (requestFocus) {
+            focusRequester.requestFocus()
+            keyboard?.show()
+            onFocusConsumed()
+        }
+    }
+
+    val transformation = remember(value.text, value.selection.start, useMarkdown, codeLanguage, spanBase, colors) {
+        when {
+            codeLanguage != null -> CodeHighlightTransformation(codeLanguage)
+            useMarkdown -> InlineMarkdownTransformation(value.selection.start, spanBase, colors)
+            else -> VisualTransformation.None
+        }
+    }
+
+    val emojiQuery = remember(value.text, value.selection, readOnly) {
+        if (!readOnly && useMarkdown && showEmojiPicker) {
+            activeEmojiQuery(value.text, value.selection)
+        } else {
+            null
+        }
+    }
+    val emojiMatches = remember(emojiQuery) {
+        emojiQuery?.let { LexicalInline.suggest(it) } ?: emptyList()
+    }
+
+    fun insertShortcode(shortcode: String) {
+        val text = value.text
+        val caret = value.selection.start.coerceIn(0, text.length)
+        val start = text.lastIndexOf(':', (caret - 1).coerceAtLeast(0))
+        if (start < 0) return
+        val replacement = ":$shortcode: "
+        val updated = text.substring(0, start) + replacement + text.substring(caret)
+        val newCaret = start + replacement.length
+        value = TextFieldValue(updated, TextRange(newCaret))
+        onTextCommitted(updated)
+    }
+
+    // Hand the query to the editor so the strip can be drawn above the IME
+    // instead of underneath the block being edited.
+    if (suggestions != null) {
+        SideEffect {
+            if (emojiMatches.isEmpty()) {
+                suggestions.hide()
+            } else {
+                suggestions.show(emojiQuery!!) { insertShortcode(it) }
+            }
+        }
+        DisposableEffect(suggestions) {
+            onDispose { suggestions.hide() }
+        }
+    }
+
+    Column(modifier = modifier) {
+        BasicTextField(
+            value = value,
+            onValueChange = { fresh ->
+                if (readOnly) return@BasicTextField
+                val oldText = value.text
+                val newText = fresh.text
+                val oldBreaks = oldText.count { it == '\n' }
+                val newBreaks = newText.count { it == '\n' }
+                val singleEnter = newText.length == oldText.length + 1 && newBreaks == oldBreaks + 1
+                val keepsNewlines = LexicalSource.keepsNewlines(block)
+
+                when {
+                    // Enter on a prose block splits it into a new block; on an
+                    // empty list item it leaves the list. Use the IME's own
+                    // newline twice (a blank line) for a full paragraph break.
+                    singleEnter && !keepsNewlines -> {
+                        if (oldText.isBlank()) {
+                            // Nothing to split: just add the line.
+                            value = fresh
+                            onTextCommitted(newText)
+                        } else {
+                            val offset = firstDifference(oldText, newText)
+                                .coerceIn(0, oldText.length)
+                            val before = oldText.substring(0, offset)
+                            value = TextFieldValue(before, TextRange(before.length))
+                            onSplit(oldText, offset)
+                        }
+                    }
+                    // Multi-line insert (paste): write everything into the block
+                    // and keep only the first line in this field; the parser
+                    // turns the rest into their own blocks.
+                    newBreaks > oldBreaks && !keepsNewlines -> {
+                        val firstLine = newText.substringBefore('\n')
+                        val caretInFirst = fresh.selection.start.coerceIn(0, firstLine.length)
+                        value = TextFieldValue(firstLine, TextRange(caretInFirst))
+                        onTextCommitted(newText)
+                    }
+                    else -> {
+                        value = fresh
+                        onTextCommitted(newText)
+                    }
+                }
+            },
+            textStyle = textStyle,
+            cursorBrush = SolidColor(IndigoAccent),
+            visualTransformation = transformation,
+            readOnly = readOnly,
+            modifier = Modifier
+                .fillMaxWidth()
+                .focusRequester(focusRequester)
+                .onFocusChanged { state ->
+                    isFocused = state.isFocused
+                    if (state.isFocused) {
+                        wasFocused = true
+                    } else if (wasFocused) {
+                        wasFocused = false
+                        onFocusLost()
+                    }
+                },
+            decorationBox = { innerTextField ->
+                Box {
+                    if (value.text.isEmpty() && placeholder != null) {
+                        Text(
+                            text = placeholder,
+                            style = textStyle.copy(color = colors.muted.copy(alpha = 0.7f)),
+                            maxLines = 1
+                        )
+                    }
+                    innerTextField()
+                }
+            }
+        )
+
+        if (suggestions == null && emojiMatches.isNotEmpty()) {
+            EmojiSuggestionBar(
+                suggestions = emojiMatches,
+                onPick = { shortcode -> insertShortcode(shortcode) }
+            )
+        }
+    }
+}
+
+/** The `:prefix` immediately before the caret, or null. */
+internal fun activeEmojiQuery(text: String, selection: TextRange): String? {
+    if (!selection.collapsed) return null
+    val caret = selection.start
+    if (caret <= 0 || caret > text.length) return null
+    val start = text.lastIndexOf(':', caret - 1)
+    if (start < 0) return null
+    val token = text.substring(start + 1, caret)
+    // A bare `:` is not a query yet, so "Note:" and "10:30" never pop the
+    // strip. Reading `text[start + 1]` here used to throw when the colon was
+    // the last character of the block (e.g. right after splitting on it).
+    if (token.isEmpty() || token.length > 32) return null
+    if (!token[0].isLetter()) return null
+    if (!token.all { it.isLetterOrDigit() || it == '_' || it == '-' || it == '+' }) return null
+    return token
+}
+
+@Composable
+internal fun EmojiSuggestionBar(
+    suggestions: List<Pair<String, String>>,
+    onPick: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    LazyRow(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(SurfaceSlate)
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        contentPadding = PaddingValues(horizontal = 2.dp)
+    ) {
+        items(suggestions) { (shortcode, glyph) ->
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onPick(shortcode) }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = glyph, fontSize = 16.sp)
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                    text = ":$shortcode:",
+                    color = TextSecondary,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The `:` strip, pinned under the editor content so the IME can never cover it.
+ * Renders nothing unless the focused field is inside a `:shortcode`.
+ */
+@Composable
+fun EmojiSuggestionTray(
+    host: EmojiSuggestionHost,
+    modifier: Modifier = Modifier
+) {
+    val current = host.current ?: return
+    val matches = remember(current.query) { LexicalInline.suggest(current.query) }
+    if (matches.isEmpty()) return
+    // A solid backdrop, so list content scrolled underneath the pinned strip
+    // never shows through the rounded corners.
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .wrapContentHeight()
+            .background(SpaceBlack)
+    ) {
+        EmojiSuggestionBar(
+            suggestions = matches,
+            onPick = { shortcode -> current.insert(shortcode) },
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+        )
+    }
+}
+
+private fun firstDifference(a: String, b: String): Int {
+    val limit = minOf(a.length, b.length)
+    var index = 0
+    while (index < limit && a[index] == b[index]) index++
+    return index
+}
+
+/**
+ * Colour palette for inline markdown inside the editor, derived from the app
+ * theme so the live view matches the rendered view exactly.
+ */
+fun lexicalInlineColors(
+    text: Color = TextPrimary,
+    muted: Color = TextMuted,
+    link: Color = IndigoGlow
+): LexicalInlineColors = LexicalInlineColors(
+    text = text,
+    muted = muted,
+    code = Color(0xFF9AE6B4),
+    codeBackground = Color(0xFF14212E),
+    link = link,
+    // LaTeX reads as a quiet violet formula chip; the old amber-on-brown pair
+    // looked like a highlighter mark and fought the code-chip palette.
+    math = Color(0xFFC4B5FD),
+    mathBackground = Color(0xFF1E1B4B).copy(alpha = 0.75f),
+    timestamp = IndigoGlow,
+    timestampBackground = IndigoAccent.copy(alpha = 0.22f),
+    highlightBackground = Color(0xFF3F3A12)
+)
+
+/** Couple of spacing helpers kept here so the editor file stays readable. */
+internal val BlockVerticalGap = 10.dp
+internal val InlineCodeRadius = 4.dp
+internal val CodeBlockRadius = 12.dp
+internal val CodeBlockHeaderHeight = 34.dp
+internal val SecondaryTextSize = 12.sp
+internal val HairlineColor = BorderSlate

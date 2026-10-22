@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only harness for the Lexical renderer. It is never merged into a
+  release build, so it cannot ship; it exists so the live editor can be
+  exercised on a device without editing a real (synced) notebook.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <activity
+            android:name=".debug.LexicalPlaygroundActivity"
+            android:exported="true"
+            android:label="Lexical Playground"
+            android:windowSoftInputMode="adjustResize" />
+    </application>
+
+</manifest>

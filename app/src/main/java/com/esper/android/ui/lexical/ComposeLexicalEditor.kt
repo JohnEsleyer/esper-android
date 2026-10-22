@@ -5,13 +5,30 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.animation.*
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -19,9 +36,32 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,19 +76,31 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.esper.android.ui.components.KaTeXMathView
 import com.esper.android.ui.components.LocalReadOnlyMode
-import com.esper.android.ui.theme.*
+import com.esper.android.ui.theme.AmberGlow
+import com.esper.android.ui.theme.BorderSlate
+import com.esper.android.ui.theme.CosmicSlate
+import com.esper.android.ui.theme.EmeraldSync
+import com.esper.android.ui.theme.IndigoAccent
+import com.esper.android.ui.theme.IndigoGlow
+import com.esper.android.ui.theme.RoseRuby
+import com.esper.android.ui.theme.SpaceBlack
+import com.esper.android.ui.theme.SurfaceSlate
+import com.esper.android.ui.theme.TextMuted
+import com.esper.android.ui.theme.TextPrimary
+import com.esper.android.ui.theme.TextSecondary
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -142,6 +194,10 @@ internal fun ensureEscapeParagraph(fresh: TextFieldValue): TextFieldValue {
  */
 private fun trailingNewlineOf(text: String): String = if (text.endsWith("\n")) "\n" else ""
 
+private val CodeBackground = Color(0xFF050811)
+private val CodeHeaderBackground = Color(0xFF0B1120)
+private val CodeTextColor = Color(0xFFE0E7FF)
+
 @Composable
 fun ComposeLexicalEditor(
     initialMarkdown: String,
@@ -149,41 +205,46 @@ fun ComposeLexicalEditor(
     onTimestampClicked: (Int) -> Unit,
     modifier: Modifier = Modifier,
     readOnly: Boolean = LocalReadOnlyMode.current,
-    /** Journal UX: tapping anywhere starts editing — switches out of the
-     *  rendered view, focuses the raw field and summons the keyboard. */
+    /** Kept for API compatibility: the live editor is always tap-to-edit. */
     tapToEditAnywhere: Boolean = false
 ) {
     val coroutineScope = rememberCoroutineScope()
     val currentOnContentChanged by rememberUpdatedState(onContentChanged)
-    var rawText by remember { mutableStateOf(initialMarkdown) }
+
+    // A MutableState (not a captured local) so several edits in the same frame
+    // always build on the newest text instead of a stale snapshot.
+    val textState = remember { mutableStateOf(initialMarkdown) }
+    val rawText = textState.value
     val currentRawText by rememberUpdatedState(rawText)
-    var blocks by remember(rawText) { mutableStateOf(LexicalParser.parseToLexicalAst(rawText)) }
+
+    val blocks = remember(rawText) { LexicalParser.parseToLexicalAst(rawText) }
+
+    // Raw markdown remains available as an escape hatch for power users and
+    // for constructs the block editor deliberately does not own (images,
+    // tables, HTML). It is no longer how you normally edit a note.
     var isRawEditMode by remember { mutableStateOf(false) }
     var debounceJob by remember { mutableStateOf<Job?>(null) }
 
-    // Editable field state (text + cursor selection), so tap-anywhere can
-    // place the cursor at the end the way "start writing" implies.
     var fieldValue by remember {
         mutableStateOf(TextFieldValue(initialMarkdown, TextRange(initialMarkdown.length)))
     }
-
-    // Tracking focus lets background syncs (SSE echo -> pull -> Room re-emit)
-    // be buffered while the user is typing instead of resetting the field.
     var isFieldFocused by remember { mutableStateOf(false) }
     var pendingExternalText by remember { mutableStateOf<String?>(null) }
 
-    // Tap-anywhere editing support: incrementing armRequest counts edit
-    // intents (page taps, mode toggles) and fires focus + keyboard once the
-    // raw field is composed. It never resets to 0, so a new intent always
-    // re-key the effect without cancelling an in-flight focus request.
-    val focusRequester = remember { FocusRequester() }
-    val keyboardController = LocalSoftwareKeyboardController.current
-    var armRequest by remember { mutableIntStateOf(0) }
+    // Exactly one block is in edit mode at a time ("tap a block to edit it").
+    var editingKey by remember { mutableStateOf<String?>(null) }
+    var editingCaret by remember { mutableStateOf<Int?>(null) }
+    var focusLine by remember { mutableStateOf<Int?>(null) }
+
+    val colors = remember { lexicalInlineColors() }
+    // Shared with the focused field; the `:` strip is drawn at the bottom of
+    // the screen so the IME cannot hide it.
+    val emojiSuggestions = remember { EmojiSuggestionHost() }
 
     fun commitText(newText: String) {
         if (readOnly) return
-        rawText = newText
-        blocks = LexicalParser.parseToLexicalAst(newText)
+        if (newText == textState.value) return
+        textState.value = newText
         debounceJob?.cancel()
         debounceJob = coroutineScope.launch {
             delay(300)
@@ -191,57 +252,68 @@ fun ComposeLexicalEditor(
         }
     }
 
-    /** Toolbar actions append at the content end; move both text and the
-     *  cursor there afterwards. */
+    /** Writes the edited text of one block back into the document. */
+    fun commitBlockText(block: LexicalBlockNode, text: String) {
+        // `/code` typed on its own line becomes a real fenced block.
+        if (block is LexicalParagraphNode) {
+            val match = SLASH_CODE_REGEX.matchEntire(text.trim())
+            if (match != null) {
+                val language = match.groupValues.getOrNull(1)?.ifBlank { null } ?: "cpp"
+                commitText(LexicalSource.withEditableText(textState.value, block, "```$language\n\n```"))
+                return
+            }
+        }
+        commitText(LexicalSource.withEditableText(textState.value, block, text))
+    }
+
+    fun commitSplit(block: LexicalBlockNode, text: String, offset: Int) {
+        val result = LexicalSource.splitBlock(textState.value, block, text, offset) ?: return
+        commitText(result.markdown)
+        focusLine = result.focusLine
+    }
+
+    fun requestEdit(block: LexicalBlockNode, caret: Int) {
+        if (readOnly) return
+        editingCaret = caret
+        editingKey = block.key
+    }
+
+    /** Toolbar actions insert after the block being edited, or at the end. */
     fun commitToolbarAction(action: LexicalAction) {
-        val updated = applyAction(rawText, action)
+        val snippet = actionSnippet(action)
+        val anchor = blocks.firstOrNull { it.key == editingKey }
+        val updated = if (anchor != null) {
+            val lines = textState.value.split('\n').toMutableList()
+            val at = (anchor.lineEnd + 1).coerceIn(0, lines.size)
+            lines.addAll(at, snippet.split('\n'))
+            lines.joinToString("\n")
+        } else {
+            val base = textState.value
+            val separator = when {
+                base.isEmpty() -> ""
+                base.endsWith("\n") -> ""
+                else -> "\n"
+            }
+            base + separator + snippet
+        }
         commitText(updated)
         fieldValue = TextFieldValue(updated, TextRange(updated.length))
+        editingKey = null
     }
 
-    /** Remote/Room re-emissions: update source of truth + rendered blocks
-     *  without scheduling a save (no local change to push back). */
+    /** Remote/Room re-emissions: update the source of truth + rendered blocks. */
     fun renderExternal(text: String) {
-        rawText = text
-        blocks = LexicalParser.parseToLexicalAst(text)
+        textState.value = text
         fieldValue = TextFieldValue(text, TextRange(text.length))
-    }
-
-    /** Removes a code block — fence included — from the raw markdown. */
-    fun deleteCodeBlock(block: LexicalCodeBlockNode) {
-        if (readOnly) return
-        val lines = rawText.lines()
-        val start = block.lineStartIndex
-        if (start !in lines.indices) return
-        val end = block.lineEndIndex.coerceIn(start, lines.size - 1)
-        val newLines = lines.toMutableList()
-        newLines.subList(start, end + 1).clear()
-        val newText = newLines.joinToString("\n") + trailingNewlineOf(rawText)
-        commitText(newText)
-        fieldValue = TextFieldValue(newText, TextRange(newText.length))
-    }
-
-    /** Rewrites the fence tag of a code block, e.g. ```python -> ```cpp. */
-    fun changeCodeLanguage(block: LexicalCodeBlockNode, language: String) {
-        if (readOnly) return
-        val lines = rawText.lines()
-        val index = block.lineStartIndex
-        if (index !in lines.indices) return
-        val fence = lines[index]
-        val indent = fence.takeWhile { it == ' ' || it == '\t' }
-        val newLines = lines.toMutableList()
-        newLines[index] = indent + "```" + language
-        val newText = newLines.joinToString("\n") + trailingNewlineOf(rawText)
-        commitText(newText)
-        fieldValue = TextFieldValue(newText, TextRange(newText.length))
+        editingKey = null
     }
 
     // Synchronize external markdown changes (Room re-emissions) without ever
     // clobbering in-flight keystrokes: while the field is focused, incoming
     // text is buffered and applied only once the field is unfocused.
     LaunchedEffect(initialMarkdown) {
-        if (rawText == initialMarkdown) return@LaunchedEffect
-        if (isFieldFocused || debounceJob?.isActive == true) {
+        if (textState.value == initialMarkdown) return@LaunchedEffect
+        if (isFieldFocused || editingKey != null || debounceJob?.isActive == true) {
             pendingExternalText = initialMarkdown
         } else {
             renderExternal(initialMarkdown)
@@ -251,11 +323,11 @@ fun ComposeLexicalEditor(
     // Drain the buffered remote/Room text (if any still differs) when the
     // user idles away from the field. Skip while a debounce is still saving
     // so a stale snapshot never replays over fresher local text.
-    LaunchedEffect(isFieldFocused) {
-        if (isFieldFocused) return@LaunchedEffect
+    LaunchedEffect(isFieldFocused, editingKey) {
+        if (isFieldFocused || editingKey != null) return@LaunchedEffect
         val buffered = pendingExternalText
         pendingExternalText = null
-        if (buffered != null && debounceJob?.isActive != true && buffered != rawText) {
+        if (buffered != null && debounceJob?.isActive != true && buffered != textState.value) {
             renderExternal(buffered)
         }
     }
@@ -271,21 +343,49 @@ fun ComposeLexicalEditor(
         }
     }
 
+    // Always leave an editable paragraph at the end so there is somewhere to
+    // continue writing after a list, code block or table.
+    val displayBlocks = remember(blocks, rawText) {
+        val list = blocks.toMutableList()
+        if (list.lastOrNull() !is LexicalParagraphNode) {
+            val line = rawText.split('\n').size
+            list += LexicalParagraphNode(
+                key = "p@tail",
+                inlines = emptyList(),
+                lineStart = line,
+                lineEnd = line
+            )
+        }
+        list
+    }
+
+    // After a split, hand editing over to the block that was just created so
+    // the caret continues on the new line without any extra tap.
+    LaunchedEffect(focusLine, blocks) {
+        val line = focusLine ?: return@LaunchedEffect
+        val target = blocks.firstOrNull { it.lineStart == line }
+        if (target != null) {
+            editingCaret = 0
+            editingKey = target.key
+        }
+        focusLine = null
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .imePadding()
             .background(SpaceBlack)
     ) {
-        // Formatting Toolbar (read-only: only the Native/Raw view toggle remains)
         LexicalToolbar(
             isRawMode = isRawEditMode,
             readOnly = readOnly,
             onToggleMode = {
+                if (!isRawEditMode) {
+                    editingKey = null
+                    fieldValue = TextFieldValue(rawText, TextRange(rawText.length))
+                }
                 isRawEditMode = !isRawEditMode
-                // Switching into the editable view from the chip is an explicit
-                // edit intent: arm focus + keyboard alongside tap-anywhere.
-                if (tapToEditAnywhere && isRawEditMode && !readOnly) armRequest++
             },
             onAction = { action -> commitToolbarAction(action) }
         )
@@ -295,232 +395,347 @@ fun ComposeLexicalEditor(
         AnimatedContent(
             targetState = isRawEditMode,
             transitionSpec = { fadeIn() togetherWith fadeOut() },
+            // Weight, not fillMaxSize: the emoji strip below is a sibling, and
+            // a fillMaxSize child would stretch over it and leave it no room.
+            modifier = Modifier.weight(1f),
             label = "EditorEngineView"
         ) { isRaw ->
             if (isRaw) {
-                // Interactive Raw Markdown mode with generous fixed bottom padding for keyboard comfort
-                val scrollState = rememberScrollState()
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(scrollState)
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                        // Tap anywhere in the page (not just on the text line)
-                        // to summon the cursor and keyboard.
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { if (tapToEditAnywhere && !readOnly) armRequest++ }
-                ) {
-                    // Focus + keyboard once the field is composed, either via
-                    // tap-anywhere or the Native/Raw chip toggling into edit.
-                    LaunchedEffect(armRequest) {
-                        if (armRequest == 0 || readOnly || !isRawEditMode) return@LaunchedEffect
-                        // Tap-to-edit means "start writing": place the cursor
-                        // at the end before requesting focus.
-                        fieldValue = TextFieldValue(rawText, TextRange(rawText.length))
-                        // Retry briefly: the field may still be entering the
-                        // composition on the first frame after the mode flip.
-                        repeat(3) {
-                            delay(50)
-                            focusRequester.requestFocus()
-                            keyboardController?.show()
-                        }
-                    }
-                    BasicTextField(
-                        value = fieldValue,
-                        onValueChange = { fresh ->
-                            if (!readOnly) {
-                                // Keep the IME's own value (text + selection)
-                                // exactly as delivered; only then mirror the
-                                // text into rawText/blocks and save.
-                                // `/code` is expanded into a real code block
-                                // first, and a freshly closed fence gets an
-                                // escape paragraph underneath.
-                                val processed = expandSlashCode(fresh) ?: ensureEscapeParagraph(fresh)
-                                fieldValue = processed
-                                commitText(processed.text)
-                            }
-                        },
-                        readOnly = readOnly,
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            color = if (readOnly) TextSecondary else TextPrimary,
-                            lineHeight = 22.sp,
-                            fontFamily = FontFamily.Monospace
-                        ),
-                        cursorBrush = SolidColor(IndigoAccent),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(focusRequester)
-                            .onFocusChanged { isFieldFocused = it.isFocused }
-                    )
-                    // Ample fixed empty space below the editor so typing text is always visible above the keyboard
-                    Spacer(modifier = Modifier.height(340.dp))
-                }
+                RawMarkdownEditor(
+                    value = fieldValue,
+                    onValueChange = { fresh ->
+                        if (readOnly) return@RawMarkdownEditor
+                        val processed = expandSlashCode(fresh) ?: ensureEscapeParagraph(fresh)
+                        fieldValue = processed
+                        commitText(processed.text)
+                    },
+                    readOnly = readOnly,
+                    isFocused = { isFieldFocused = it }
+                )
             } else {
-                // Native Lexical Component Viewport with fixed bottom padding.
-                // In tap-to-edit screens, any tap starts editing: flips to the
-                // raw field and focuses it (child taps like links still win,
-                // they consume their own touches first).
-                val nativeTapModifier = if (tapToEditAnywhere && !readOnly) {
-                    Modifier.pointerInput(Unit) {
-                        detectTapGestures {
-                            isRawEditMode = true
-                            armRequest++
-                        }
-                    }
-                } else Modifier
                 LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .then(nativeTapModifier)
-                        .padding(horizontal = 16.dp),
-                    contentPadding = PaddingValues(top = 16.dp, bottom = 340.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp)
                 ) {
-                    itemsIndexed(blocks, key = { _, it -> it.key }) { _, block ->
-                        LexicalBlockRenderer(
-                            block = block,
-                            onTimestampClicked = onTimestampClicked,
-                            onToggleTask = { _ -> },
-                            readOnly = readOnly,
-                            onDeleteCodeBlock = { deleteCodeBlock(it) },
-                            onChangeCodeLanguage = { target, language -> changeCodeLanguage(target, language) }
-                        )
+                    itemsIndexed(displayBlocks, key = { _, block -> block.key }) { index, block ->
+                        // Consecutive list items hug each other; everything
+                        // else keeps the normal block rhythm.
+                        val previous = displayBlocks.getOrNull(index - 1)
+                        val gap = if (previous is LexicalListItemNode && block is LexicalListItemNode) {
+                            2.dp
+                        } else {
+                            BlockVerticalGap
+                        }
+                        Column(modifier = Modifier.padding(top = gap)) {
+                            LiveBlock(
+                                block = block,
+                                markdown = rawText,
+                                readOnly = readOnly,
+                                colors = colors,
+                                isEditing = editingKey == block.key,
+                                editingCaret = editingCaret,
+                                focusLine = focusLine,
+                                tapToEditAnywhere = tapToEditAnywhere,
+                                suggestionsHost = emojiSuggestions,
+                                onRequestEdit = { target, caret -> requestEdit(target, caret) },
+                                onFocusLost = {
+                                    if (editingKey == block.key) {
+                                        editingKey = null
+                                        editingCaret = null
+                                    }
+                                },
+                                onFocusConsumed = {
+                                    if (focusLine == block.lineStart) focusLine = null
+                                },
+                                onTimestampClicked = onTimestampClicked,
+                                onToggleTask = { checked ->
+                                    if (block is LexicalListItemNode) {
+                                        commitText(LexicalSource.setTaskChecked(textState.value, block, checked))
+                                    }
+                                },
+                                onTextCommitted = { text -> commitBlockText(block, text) },
+                                onSplit = { text, offset -> commitSplit(block, text, offset) },
+                                onDeleteBlock = { commitText(LexicalSource.removeBlock(textState.value, block)) },
+                                onChangeCodeLanguage = { language ->
+                                    if (block is LexicalCodeBlockNode) {
+                                        val lines = textState.value.split('\n').toMutableList()
+                                        val fenceIndex = block.lineStart
+                                        if (fenceIndex in lines.indices) {
+                                            val fence = lines[fenceIndex]
+                                            val indent = fence.takeWhile { it == ' ' || it == '\t' }
+                                            lines[fenceIndex] = indent + "```" + language
+                                            commitText(lines.joinToString("\n") + trailingNewlineOf(textState.value))
+                                        }
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }
         }
+
+        // Pinned below the list (and above the keyboard) so it is always
+        // reachable, even when the edited block is the last one on screen.
+        EmojiSuggestionTray(host = emojiSuggestions)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Raw markdown escape hatch
+// ---------------------------------------------------------------------------
+
 @Composable
-fun LexicalBlockRenderer(
+private fun RawMarkdownEditor(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    readOnly: Boolean,
+    isFocused: (Boolean) -> Unit
+) {
+    val scrollState = rememberScrollState()
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            readOnly = readOnly,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                color = if (readOnly) TextSecondary else TextPrimary,
+                lineHeight = 22.sp,
+                fontFamily = FontFamily.Monospace
+            ),
+            cursorBrush = SolidColor(IndigoAccent),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { isFocused(it.isFocused) }
+        )
+        Spacer(modifier = Modifier.height(240.dp))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Blocks
+// ---------------------------------------------------------------------------
+
+private val ParagraphSize = 14.sp
+private val ParagraphLineHeight = 22.sp
+
+@Composable
+private fun LiveBlock(
     block: LexicalBlockNode,
+    markdown: String,
+    readOnly: Boolean,
+    colors: LexicalInlineColors,
+    isEditing: Boolean,
+    editingCaret: Int?,
+    focusLine: Int?,
+    tapToEditAnywhere: Boolean,
+    suggestionsHost: EmojiSuggestionHost,
+    onRequestEdit: (LexicalBlockNode, Int) -> Unit,
+    onFocusLost: () -> Unit,
+    onFocusConsumed: () -> Unit,
     onTimestampClicked: (Int) -> Unit,
     onToggleTask: (Boolean) -> Unit,
-    readOnly: Boolean = false,
-    onDeleteCodeBlock: (LexicalCodeBlockNode) -> Unit = { },
-    onChangeCodeLanguage: (LexicalCodeBlockNode, String) -> Unit = { _, _ -> }
+    onTextCommitted: (String) -> Unit,
+    onSplit: (String, Int) -> Unit,
+    onDeleteBlock: () -> Unit,
+    onChangeCodeLanguage: (String) -> Unit
 ) {
     when (block) {
+        is LexicalBlankLineNode ->
+            Spacer(modifier = Modifier.height((block.count * 10).dp))
+
+        is LexicalHorizontalRuleNode -> Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 10.dp)
+                .height(1.dp)
+                .background(BorderSlate)
+        )
+
         is LexicalHeadingNode -> {
             val (size, weight, color) = when (block.level) {
                 1 -> Triple(24.sp, FontWeight.ExtraBold, Color.White)
                 2 -> Triple(19.sp, FontWeight.Bold, Color(0xFFF1F5F9))
                 3 -> Triple(16.sp, FontWeight.SemiBold, Color(0xFFE2E8F0))
-                else -> Triple(14.sp, FontWeight.Medium, TextSecondary)
+                4 -> Triple(15.sp, FontWeight.SemiBold, Color(0xFFCBD5E1))
+                5 -> Triple(14.sp, FontWeight.Medium, Color(0xFFB6C2D2))
+                else -> Triple(13.sp, FontWeight.Medium, TextSecondary)
             }
-            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                LexicalInlineContent(
+            // Below h3 the sizes converge, so letter spacing carries the
+            // remaining hierarchy instead of a wall of identical grey lines.
+            val spacing = when (block.level) {
+                5 -> 0.3.sp
+                6 -> 0.8.sp
+                else -> 0.sp
+            }
+            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                EditableBlockText(
+                    block = block,
                     inlines = block.inlines,
-                    baseFontSize = size,
-                    baseFontWeight = weight,
-                    baseColor = color,
-                    onTimestampClicked = onTimestampClicked
+                    editableText = LexicalSource.editableText(markdown, block),
+                    textStyle = TextStyle(
+                        fontSize = size,
+                        fontWeight = weight,
+                        color = color,
+                        lineHeight = (size.value * 1.35f).sp,
+                        letterSpacing = spacing
+                    ),
+                    spanBase = SpanStyle(
+                        fontSize = size,
+                        fontWeight = weight,
+                        color = color,
+                        letterSpacing = spacing
+                    ),
+                    readOnly = readOnly,
+                    isEditing = isEditing,
+                    editingCaret = editingCaret,
+                    colors = colors,
+                    placeholder = null,
+                    onRequestEdit = onRequestEdit,
+                    onFocusLost = onFocusLost,
+                    onTimestampClicked = onTimestampClicked,
+                    suggestions = suggestionsHost,
+                    onTextCommitted = onTextCommitted,
+                    onSplit = onSplit
                 )
                 if (block.level <= 2) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(BorderSlate))
-                }
-            }
-        }
-
-        is LexicalMathBlockNode -> {
-            KaTeXMathView(latex = block.latex, isDisplayMode = true)
-        }
-
-        is LexicalImageNode -> {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = CosmicSlate,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(8.dp)) {
-                    AsyncImage(
-                        model = block.imageUrl,
-                        contentDescription = block.altText,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 240.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                    )
-                    if (block.altText.isNotBlank()) {
-                        Text(
-                            text = block.altText,
-                            color = TextMuted,
-                            fontSize = 11.sp,
-                            fontStyle = FontStyle.Italic,
-                            modifier = Modifier.padding(top = 4.dp, start = 4.dp)
-                        )
-                    }
-                }
-            }
-        }
-
-        is LexicalQuoteNode -> {
-            Surface(
-                shape = RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp),
-                color = IndigoAccent.copy(alpha = 0.08f),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(modifier = Modifier.height(6.dp))
                     Box(
                         modifier = Modifier
-                            .width(3.dp)
-                            .height(30.dp)
-                            .background(IndigoAccent, RoundedCornerShape(2.dp))
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    LexicalInlineContent(
-                        inlines = block.inlines,
-                        baseFontSize = 14.sp,
-                        baseFontWeight = FontWeight.Normal,
-                        baseColor = TextSecondary,
-                        isItalic = true,
-                        onTimestampClicked = onTimestampClicked
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(BorderSlate.copy(alpha = 0.8f))
                     )
                 }
             }
         }
 
-        is LexicalCodeBlockNode -> {
-            LexicalCodeBlock(
+        is LexicalMathBlockNode -> MathBlock(
+            block = block,
+            readOnly = readOnly,
+            isEditing = isEditing,
+            editingCaret = editingCaret,
+            colors = colors,
+            onRequestEdit = onRequestEdit,
+            onFocusLost = onFocusLost,
+            onTextCommitted = onTextCommitted
+        )
+
+        is LexicalImageNode -> Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = CosmicSlate,
+            border = BorderStroke(1.dp, BorderSlate.copy(alpha = 0.7f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(8.dp)) {
+                AsyncImage(
+                    model = block.imageUrl,
+                    contentDescription = block.altText,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 260.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                )
+                if (block.altText.isNotBlank()) {
+                    Text(
+                        text = block.altText,
+                        color = TextMuted,
+                        fontSize = 11.sp,
+                        fontStyle = FontStyle.Italic,
+                        modifier = Modifier.padding(top = 6.dp, start = 4.dp)
+                    )
+                }
+            }
+        }
+
+        is LexicalQuoteNode -> Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(topEnd = 10.dp, bottomEnd = 10.dp))
+                .background(IndigoAccent.copy(alpha = 0.08f))
+                .padding(vertical = 8.dp, horizontal = 10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .heightIn(min = 24.dp)
+                    .background(IndigoAccent, RoundedCornerShape(2.dp))
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            EditableBlockText(
                 block = block,
+                inlines = block.inlines,
+                editableText = LexicalSource.editableText(markdown, block),
+                textStyle = TextStyle(
+                    fontSize = ParagraphSize,
+                    lineHeight = ParagraphLineHeight,
+                    color = TextSecondary,
+                    fontStyle = FontStyle.Italic
+                ),
+                spanBase = SpanStyle(
+                    fontSize = ParagraphSize,
+                    color = TextSecondary,
+                    fontStyle = FontStyle.Italic
+                ),
                 readOnly = readOnly,
-                onDeleteCodeBlock = onDeleteCodeBlock,
-                onChangeCodeLanguage = onChangeCodeLanguage
+                isEditing = isEditing,
+                editingCaret = editingCaret,
+                colors = colors,
+                placeholder = null,
+                onRequestEdit = onRequestEdit,
+                onFocusLost = onFocusLost,
+                onTimestampClicked = onTimestampClicked,
+                suggestions = suggestionsHost,
+                onTextCommitted = onTextCommitted,
+                onSplit = onSplit,
+                modifier = Modifier.weight(1f)
             )
         }
 
-        is LexicalListItemNode -> {
-            // Left padding based on nesting depth (20.dp per indent level)
-            val startPadding = (block.indentLevel * 20).dp
+        is LexicalCodeBlockNode -> LexicalCodeBlock(
+            block = block,
+            readOnly = readOnly,
+            isEditing = isEditing,
+            editingCaret = editingCaret,
+            colors = colors,
+            onRequestEdit = onRequestEdit,
+            onFocusLost = onFocusLost,
+            onTextCommitted = onTextCommitted,
+            onDeleteBlock = onDeleteBlock,
+            onChangeCodeLanguage = onChangeCodeLanguage
+        )
 
+        is LexicalListItemNode -> {
+            val startPadding = (block.indentLevel * 18).dp
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = startPadding, top = 2.dp, bottom = 2.dp),
+                    .padding(start = startPadding, top = 1.dp, bottom = 1.dp),
                 verticalAlignment = Alignment.Top
             ) {
                 if (block.isTask) {
                     Checkbox(
                         checked = block.isChecked,
-                        onCheckedChange = { onToggleTask(it) },
+                        onCheckedChange = { checked -> if (!readOnly) onToggleTask(checked) },
                         colors = CheckboxDefaults.colors(
                             checkedColor = IndigoAccent,
                             uncheckedColor = TextMuted
                         ),
                         modifier = Modifier
-                            .size(24.dp)
+                            .size(26.dp)
                             .padding(end = 4.dp)
                     )
                 } else if (block.isOrdered) {
                     // Cycle format by nesting level: 1. -> a. -> i.
                     val prefix = when (block.indentLevel % 3) {
                         1 -> "${('a'.code + ((block.indexNumber ?: 1) - 1) % 26).toChar()}."
-                        2 -> "i."
+                        2 -> roman(block.indexNumber ?: 1) + "."
                         else -> "${block.indexNumber ?: 1}."
                     }
                     Text(
@@ -528,197 +743,187 @@ fun LexicalBlockRenderer(
                         color = IndigoGlow,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
-                        modifier = Modifier.width(24.dp)
+                        modifier = Modifier.width(30.dp)
                     )
                 } else {
-                    // Cycle bullet marker: • (disc) -> ◦ (circle) -> ▪ (square)
                     val bulletChar = when (block.indentLevel % 3) {
-                        1 -> "◦"
-                        2 -> "▪"
-                        else -> "•"
+                        1 -> "\u25E6"
+                        2 -> "\u25AA"
+                        else -> "\u2022"
                     }
                     Text(
                         text = bulletChar,
                         color = if (block.indentLevel == 0) IndigoGlow else TextSecondary,
-                        fontSize = if (bulletChar == "▪") 11.sp else 16.sp,
+                        fontSize = if (bulletChar == "\u25AA") 11.sp else 16.sp,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.width(18.dp)
+                        modifier = Modifier.width(20.dp)
                     )
                 }
 
-                LexicalInlineContent(
+                EditableBlockText(
+                    block = block,
                     inlines = block.inlines,
-                    baseFontSize = 14.sp,
-                    baseFontWeight = FontWeight.Normal,
-                    baseColor = TextPrimary,
-                    onTimestampClicked = onTimestampClicked
+                    editableText = LexicalSource.editableText(markdown, block),
+                    textStyle = TextStyle(
+                        fontSize = ParagraphSize,
+                        lineHeight = ParagraphLineHeight,
+                        color = TextPrimary
+                    ),
+                    spanBase = SpanStyle(fontSize = ParagraphSize, color = TextPrimary),
+                    readOnly = readOnly,
+                    isEditing = isEditing,
+                    editingCaret = editingCaret,
+                    colors = colors,
+                    placeholder = null,
+                    onRequestEdit = onRequestEdit,
+                    onFocusLost = onFocusLost,
+                    onTimestampClicked = onTimestampClicked,
+                    suggestions = suggestionsHost,
+                    onTextCommitted = onTextCommitted,
+                    onSplit = onSplit,
+                    modifier = Modifier.weight(1f)
                 )
             }
         }
 
-        is LexicalTableNode -> {
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = CosmicSlate,
-                border = androidx.compose.foundation.BorderStroke(1.dp, BorderSlate),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(8.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth().background(SurfaceSlate).padding(6.dp)) {
-                        block.headers.forEach { h ->
-                            Text(
-                                text = h,
-                                color = IndigoGlow,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                    block.rows.forEach { row ->
-                        Row(modifier = Modifier.fillMaxWidth().padding(6.dp)) {
-                            row.forEach { cell ->
-                                Text(
-                                    text = cell,
-                                    color = TextPrimary,
-                                    fontSize = 11.sp,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        is LexicalTableNode -> LexicalTableBlock(block, colors, onTimestampClicked)
 
-        is LexicalHorizontalRuleNode -> {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(BorderSlate)
-            )
-        }
-
-        is LexicalParagraphNode -> {
-            LexicalInlineContent(
-                inlines = block.inlines,
-                baseFontSize = 14.sp,
-                baseFontWeight = FontWeight.Normal,
-                baseColor = TextPrimary,
-                onTimestampClicked = onTimestampClicked
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun LexicalInlineContent(
-    inlines: List<LexicalInlineNode>,
-    baseFontSize: androidx.compose.ui.unit.TextUnit,
-    baseFontWeight: FontWeight,
-    baseColor: Color,
-    isItalic: Boolean = false,
-    onTimestampClicked: (Int) -> Unit
-) {
-    val context = LocalContext.current
-
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        inlines.forEach { node ->
-            when (node) {
-                is LexicalTimestampNode -> {
-                    Surface(
-                        onClick = { onTimestampClicked(node.seconds) },
-                        shape = RoundedCornerShape(6.dp),
-                        color = IndigoAccent.copy(alpha = 0.25f),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, IndigoAccent.copy(alpha = 0.5f)),
-                        modifier = Modifier.padding(vertical = 2.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                tint = IndigoGlow,
-                                modifier = Modifier.size(11.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = node.rawText,
-                                color = IndigoGlow,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-
-                is LexicalInlineMathNode -> {
-                    KaTeXMathView(latex = node.latex, isDisplayMode = false)
-                }
-
-                is LexicalLinkNode -> {
-                    Text(
-                        text = node.text,
-                        color = IndigoGlow,
-                        textDecoration = TextDecoration.Underline,
-                        fontSize = baseFontSize,
-                        modifier = Modifier.clickable {
-                            try {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(node.url))
-                                context.startActivity(intent)
-                            } catch (_: Exception) {}
-                        }
-                    )
-                }
-
-                is LexicalTextNode -> {
-                    val styled = buildAnnotatedString {
-                        withStyle(
-                            SpanStyle(
-                                color = if (node.isCode) IndigoGlow else baseColor,
-                                fontSize = baseFontSize,
-                                fontWeight = if (node.isBold) FontWeight.Bold else baseFontWeight,
-                                fontStyle = if (node.isItalic || isItalic) FontStyle.Italic else FontStyle.Normal,
-                                textDecoration = if (node.isStrikethrough) TextDecoration.LineThrough else TextDecoration.None,
-                                fontFamily = if (node.isCode) FontFamily.Monospace else FontFamily.Default,
-                                background = if (node.isCode) SurfaceSlate else Color.Transparent
-                            )
-                        ) {
-                            append(node.text)
-                        }
-                    }
-                    Text(text = styled, lineHeight = 22.sp)
-                }
-            }
-        }
+        is LexicalParagraphNode -> EditableBlockText(
+            block = block,
+            inlines = block.inlines,
+            editableText = LexicalSource.editableText(markdown, block),
+            textStyle = TextStyle(
+                fontSize = ParagraphSize,
+                lineHeight = ParagraphLineHeight,
+                color = TextPrimary
+            ),
+            spanBase = SpanStyle(fontSize = ParagraphSize, color = TextPrimary),
+            readOnly = readOnly,
+            isEditing = isEditing,
+            editingCaret = editingCaret,
+            colors = colors,
+            placeholder = if (block.plainText.isEmpty()) "Start writing\u2026" else null,
+            onRequestEdit = onRequestEdit,
+            onFocusLost = onFocusLost,
+            onTimestampClicked = onTimestampClicked,
+            suggestions = suggestionsHost,
+            onTextCommitted = onTextCommitted,
+            onSplit = onSplit
+        )
     }
 }
 
 /**
- * Renders a fenced code block with syntax highlighting, a language badge
- * that doubles as a picker, a copy button and a delete button.
+ * Renders a block as formatted text and turns it into a live field in place
+ * when tapped. That is the whole WYSIWYG story: the note is always rendered,
+ * and editing happens exactly where the user is looking.
  */
+@Composable
+private fun EditableBlockText(
+    block: LexicalBlockNode,
+    inlines: List<LexicalInlineNode>,
+    editableText: String,
+    textStyle: TextStyle,
+    spanBase: SpanStyle,
+    readOnly: Boolean,
+    isEditing: Boolean,
+    editingCaret: Int?,
+    colors: LexicalInlineColors,
+    placeholder: String?,
+    onRequestEdit: (LexicalBlockNode, Int) -> Unit,
+    onFocusLost: () -> Unit,
+    onTimestampClicked: (Int) -> Unit,
+    onTextCommitted: (String) -> Unit,
+    onSplit: (String, Int) -> Unit,
+    modifier: Modifier = Modifier,
+    suggestions: EmojiSuggestionHost? = null
+) {
+    if (!readOnly && isEditing) {
+        LiveTextField(
+            block = block,
+            initialText = editableText,
+            textStyle = textStyle,
+            spanBase = spanBase,
+            colors = colors,
+            readOnly = false,
+            requestFocus = true,
+            onFocusConsumed = {},
+            onTextCommitted = onTextCommitted,
+            onSplit = onSplit,
+            initialCaret = editingCaret,
+            placeholder = placeholder,
+            onFocusLost = onFocusLost,
+            suggestions = suggestions,
+            modifier = modifier
+        )
+        return
+    }
+
+    val annotated = remember(inlines, colors, readOnly) {
+        buildInlineText(
+            inlines = inlines,
+            base = spanBase,
+            colors = colors,
+            clickable = true,
+            onTimestampClicked = onTimestampClicked
+        )
+    }
+
+    if (annotated.isEmpty()) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .heightIn(min = 24.dp)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { onRequestEdit(block, 0) }
+        ) {
+            if (placeholder != null) {
+                Text(text = placeholder, style = textStyle.copy(color = colors.muted))
+            }
+        }
+        return
+    }
+
+    var layout by remember(block.key) { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+    Text(
+        text = annotated,
+        style = textStyle,
+        onTextLayout = { layout = it },
+        modifier = modifier
+            .fillMaxWidth()
+            .pointerInput(block.key, editableText) {
+                detectTapGestures { position ->
+                    if (readOnly) return@detectTapGestures
+                    val displayOffset = layout?.getOffsetForPosition(position) ?: editableText.length
+                    onRequestEdit(block, LexicalInline.displayOffsetToRaw(editableText, displayOffset))
+                }
+            }
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Code blocks
+// ---------------------------------------------------------------------------
+
 @Composable
 private fun LexicalCodeBlock(
     block: LexicalCodeBlockNode,
     readOnly: Boolean,
-    onDeleteCodeBlock: (LexicalCodeBlockNode) -> Unit,
-    onChangeCodeLanguage: (LexicalCodeBlockNode, String) -> Unit
+    isEditing: Boolean,
+    editingCaret: Int?,
+    colors: LexicalInlineColors,
+    onRequestEdit: (LexicalBlockNode, Int) -> Unit,
+    onFocusLost: () -> Unit,
+    onTextCommitted: (String) -> Unit,
+    onDeleteBlock: () -> Unit,
+    onChangeCodeLanguage: (String) -> Unit
 ) {
     val context = LocalContext.current
     var copied by remember(block.key) { mutableStateOf(false) }
     var isLanguageMenuOpen by remember(block.key) { mutableStateOf(false) }
 
-    // Reset the "Copied!" confirmation a couple of seconds after the tap.
     LaunchedEffect(copied) {
         if (copied) {
             delay(2000)
@@ -726,19 +931,33 @@ private fun LexicalCodeBlock(
         }
     }
 
+    val codeStyle = TextStyle(
+        fontFamily = FontFamily.Monospace,
+        fontSize = 12.5.sp,
+        lineHeight = 19.sp,
+        color = CodeTextColor
+    )
+    val codeSpan = SpanStyle(
+        fontFamily = FontFamily.Monospace,
+        fontSize = 12.5.sp,
+        color = CodeTextColor
+    )
+
     Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = Color(0xFF030712),
-        border = androidx.compose.foundation.BorderStroke(1.dp, BorderSlate),
+        shape = RoundedCornerShape(CodeBlockRadius),
+        color = CodeBackground,
+        border = BorderStroke(1.dp, BorderSlate.copy(alpha = 0.85f)),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column {
+            // Header: language chip + copy + delete, like the web overlay.
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(CodeHeaderBackground)
+                    .padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Language badge — tapping it opens the language picker.
                 Box {
                     Text(
                         text = CodeSyntaxHighlighter.displayLanguageName(block.language),
@@ -747,9 +966,10 @@ private fun LexicalCodeBlock(
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(IndigoAccent.copy(alpha = 0.16f))
                             .clickable(enabled = !readOnly) { isLanguageMenuOpen = true }
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
                     )
                     DropdownMenu(
                         expanded = isLanguageMenuOpen,
@@ -760,81 +980,272 @@ private fun LexicalCodeBlock(
                                 text = { Text(label, fontSize = 13.sp) },
                                 onClick = {
                                     isLanguageMenuOpen = false
-                                    onChangeCodeLanguage(block, value)
+                                    onChangeCodeLanguage(value)
                                 }
                             )
                         }
                     }
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Copy the block to the clipboard.
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .clickable {
-                                val clipboard =
-                                    context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("code", block.code))
-                                copied = true
-                            }
-                            .padding(horizontal = 5.dp, vertical = 2.dp)
-                    ) {
-                        if (copied) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.Check,
-                                    contentDescription = "Copied",
-                                    tint = Color(0xFF34D399),
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text(
-                                    text = "Copied!",
-                                    color = Color(0xFF34D399),
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        } else {
-                            Icon(
-                                Icons.Default.ContentCopy,
-                                contentDescription = "Copy code",
-                                tint = TextMuted,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
-                    }
+                Spacer(modifier = Modifier.weight(1f))
 
-                    if (!readOnly) {
-                        // Remove the whole block from the note.
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .clickable { onDeleteCodeBlock(block) }
-                                .padding(horizontal = 5.dp, vertical = 2.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "Delete code block",
-                                tint = TextMuted,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
+                Text(
+                    text = "${block.code.lines().size} ln",
+                    color = TextMuted.copy(alpha = 0.8f),
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.padding(end = 6.dp)
+                )
+
+                IconAction(
+                    icon = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+                    contentDescription = if (copied) "Copied" else "Copy code",
+                    tint = if (copied) EmeraldSync else TextMuted,
+                    onClick = {
+                        val clipboard =
+                            context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("code", block.code))
+                        copied = true
                     }
+                )
+
+                if (!readOnly) {
+                    IconAction(
+                        icon = Icons.Default.Delete,
+                        contentDescription = "Delete code block",
+                        tint = TextMuted,
+                        onClick = onDeleteBlock
+                    )
                 }
             }
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = CodeSyntaxHighlighter.highlight(block.code, block.language),
-                color = Color(0xFFE0E7FF),
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                lineHeight = 18.sp
-            )
+
+            HorizontalDivider(color = BorderSlate.copy(alpha = 0.55f), thickness = 1.dp)
+
+            if (!readOnly && isEditing) {
+                LiveTextField(
+                    block = block,
+                    initialText = block.code,
+                    textStyle = codeStyle,
+                    spanBase = codeSpan,
+                    colors = colors,
+                    readOnly = false,
+                    requestFocus = true,
+                    onFocusConsumed = {},
+                    onTextCommitted = onTextCommitted,
+                    onSplit = { _, _ -> },
+                    initialCaret = editingCaret,
+                    useMarkdown = false,
+                    codeLanguage = block.language,
+                    showEmojiPicker = false,
+                    onFocusLost = onFocusLost,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                )
+            } else {
+                Text(
+                    text = CodeSyntaxHighlighter.highlight(block.code, block.language),
+                    style = codeStyle,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .pointerInput(block.key, readOnly) {
+                            detectTapGestures {
+                                if (!readOnly) onRequestEdit(block, block.code.length)
+                            }
+                        }
+                )
+            }
         }
     }
 }
+
+@Composable
+private fun IconAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    tint: Color,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 7.dp, vertical = 5.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier.size(14.dp)
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Math
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun MathBlock(
+    block: LexicalMathBlockNode,
+    readOnly: Boolean,
+    isEditing: Boolean,
+    editingCaret: Int?,
+    colors: LexicalInlineColors,
+    onRequestEdit: (LexicalBlockNode, Int) -> Unit,
+    onFocusLost: () -> Unit,
+    onTextCommitted: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (!readOnly && isEditing) {
+            LiveTextField(
+                block = block,
+                initialText = block.latex,
+                textStyle = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.5.sp,
+                    lineHeight = 18.sp,
+                    color = AmberGlow
+                ),
+                spanBase = SpanStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.5.sp,
+                    color = AmberGlow
+                ),
+                colors = colors,
+                readOnly = false,
+                requestFocus = true,
+                onFocusConsumed = {},
+                onTextCommitted = onTextCommitted,
+                onSplit = { _, _ -> },
+                initialCaret = editingCaret,
+                useMarkdown = false,
+                showEmojiPicker = false,
+                onFocusLost = onFocusLost,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF14100A))
+                    .padding(10.dp)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .pointerInput(block.key, readOnly) {
+                    detectTapGestures {
+                        if (!readOnly) onRequestEdit(block, block.latex.length)
+                    }
+                }
+        ) {
+            KaTeXMathView(latex = block.latex, isDisplayMode = true)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tables
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun LexicalTableBlock(
+    block: LexicalTableNode,
+    colors: LexicalInlineColors,
+    onTimestampClicked: (Int) -> Unit
+) {
+    val cellBase = SpanStyle(fontSize = 12.sp, color = TextPrimary)
+    val headerBase = SpanStyle(fontSize = 11.sp, color = IndigoGlow, fontWeight = FontWeight.Bold)
+
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = CosmicSlate,
+        border = BorderStroke(1.dp, BorderSlate),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SurfaceSlate)
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                block.headers.forEachIndexed { index, header ->
+                    Text(
+                        text = buildInlineText(
+                            inlines = LexicalInline.toNodes(header),
+                            base = headerBase,
+                            colors = colors,
+                            clickable = false,
+                            onTimestampClicked = onTimestampClicked
+                        ),
+                        style = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Bold),
+                        textAlign = block.alignmentAt(index).toTextAlign(),
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 3.dp)
+                    )
+                }
+            }
+
+            block.rows.forEachIndexed { rowIndex, row ->
+                HorizontalDivider(color = BorderSlate.copy(alpha = 0.5f), thickness = 1.dp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            if (rowIndex % 2 == 0) Color.Transparent
+                            else SurfaceSlate.copy(alpha = 0.35f)
+                        )
+                        .padding(horizontal = 10.dp, vertical = 7.dp)
+                ) {
+                    row.forEachIndexed { index, cell ->
+                        Text(
+                            text = buildInlineText(
+                                inlines = LexicalInline.toNodes(cell),
+                                base = cellBase,
+                                colors = colors,
+                                clickable = true,
+                                onTimestampClicked = onTimestampClicked
+                            ),
+                            style = TextStyle(fontSize = 12.sp, lineHeight = 17.sp),
+                            textAlign = block.alignmentAt(index).toTextAlign(),
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 3.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun LexicalColumnAlignment.toTextAlign(): TextAlign = when (this) {
+    LexicalColumnAlignment.CENTER -> TextAlign.Center
+    LexicalColumnAlignment.RIGHT -> TextAlign.End
+    else -> TextAlign.Start
+}
+
+private fun roman(value: Int): String {
+    if (value <= 0 || value > 20) return value.toString()
+    val numerals = listOf(
+        10 to "x", 9 to "ix", 5 to "v", 4 to "iv", 1 to "i"
+    )
+    var remaining = value
+    val builder = StringBuilder()
+    numerals.forEach { (amount, symbol) ->
+        while (remaining >= amount) {
+            builder.append(symbol)
+            remaining -= amount
+        }
+    }
+    return builder.toString()
+}
+
+// ---------------------------------------------------------------------------
+// Toolbar
+// ---------------------------------------------------------------------------
 
 @Composable
 fun LexicalToolbar(
@@ -855,7 +1266,7 @@ fun LexicalToolbar(
         FilterChip(
             selected = !isRawMode,
             onClick = onToggleMode,
-            label = { Text(if (!isRawMode) "Native View" else "Raw MD", fontSize = 11.sp) },
+            label = { Text(if (!isRawMode) "Live" else "Markdown", fontSize = 11.sp) },
             leadingIcon = {
                 Icon(
                     if (!isRawMode) Icons.Default.Visibility else Icons.Default.Edit,
@@ -919,26 +1330,25 @@ private fun ToolbarBtn(
     }
 }
 
-private fun applyAction(content: String, action: LexicalAction): String {
-    return when (action) {
-        LexicalAction.AddH1 -> "$content\n# New Chapter Heading"
-        LexicalAction.AddH2 -> "$content\n## New Sub-section"
-        LexicalAction.AddH3 -> "$content\n### Topic Details"
-        LexicalAction.AddBold -> "$content **bold statement**"
-        LexicalAction.AddItalic -> "$content *italicized phrasing*"
-        LexicalAction.AddStrike -> "$content ~~strikethrough text~~"
-        LexicalAction.AddMathBlock -> "$content\n$$\n\\oint \\mathbf{B} \\cdot d\\mathbf{l} = \\mu_0 I_{\\text{enc}}\n$$\n"
-        LexicalAction.AddInlineMath -> "$content \$E = mc^2\$"
-        LexicalAction.AddImage -> "$content\n![Kepler Ellipse](https://images.unsplash.com/photo-1614728894747-a83421e2b9c9?w=800)\n"
-        LexicalAction.AddBulletList -> "$content\n- Top-level item"
-        LexicalAction.AddNestedBulletList -> "$content\n  - Nested sub-item"
-        LexicalAction.AddChecklist -> "$content\n- [ ] Unfinished task\n- [x] Verified item"
-        LexicalAction.AddTable -> "$content\n| Parameter | Value | Unit |\n|---|---|---|\n| Semi-Major Axis (a) | 1.496e8 | km |\n| Eccentricity (e) | 0.0167 | - |\n"
-        // The trailing blank line is the escape paragraph: it lets the user
-        // step out of the code block and keep writing normal notes.
-        LexicalAction.AddCodeBlock -> "$content\n```python\ndef orbital_period(a, mu):\n    return 2 * math.pi * math.sqrt(a**3 / mu)\n```\n\n"
-        LexicalAction.AddQuote -> "$content\n> Conservation of angular momentum yields constant areal velocity."
-        LexicalAction.AddTimestamp -> "$content [00:15]"
-        LexicalAction.AddDivider -> "$content\n---\n"
-    }
+/** Markdown inserted by a toolbar action. */
+internal fun actionSnippet(action: LexicalAction): String = when (action) {
+    LexicalAction.AddH1 -> "# New Chapter Heading"
+    LexicalAction.AddH2 -> "## New Sub-section"
+    LexicalAction.AddH3 -> "### Topic Details"
+    LexicalAction.AddBold -> "**bold statement**"
+    LexicalAction.AddItalic -> "*italicized phrasing*"
+    LexicalAction.AddStrike -> "~~strikethrough text~~"
+    LexicalAction.AddMathBlock -> "$$\n\\oint \\mathbf{B} \\cdot d\\mathbf{l} = \\mu_0 I_{\\text{enc}}\n$$"
+    LexicalAction.AddInlineMath -> "\$E = mc^2\$"
+    LexicalAction.AddImage -> "![Kepler Ellipse](https://images.unsplash.com/photo-1614728894747-a83421e2b9c9?w=800)"
+    LexicalAction.AddBulletList -> "- Top-level item"
+    LexicalAction.AddNestedBulletList -> "  - Nested sub-item"
+    LexicalAction.AddChecklist -> "- [ ] Unfinished task\n- [x] Verified item"
+    LexicalAction.AddTable ->
+        "| Parameter | Value | Unit |\n|---|---|---|\n| Semi-Major Axis (a) | 1.496e8 | km |\n| Eccentricity (e) | 0.0167 | - |"
+    LexicalAction.AddCodeBlock ->
+        "```python\ndef orbital_period(a, mu):\n    return 2 * math.pi * math.sqrt(a**3 / mu)\n```\n"
+    LexicalAction.AddQuote -> "> Conservation of angular momentum yields constant areal velocity."
+    LexicalAction.AddTimestamp -> "[00:15]"
+    LexicalAction.AddDivider -> "---"
 }

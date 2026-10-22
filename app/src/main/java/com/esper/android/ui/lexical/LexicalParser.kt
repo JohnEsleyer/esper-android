@@ -1,283 +1,490 @@
 package com.esper.android.ui.lexical
 
-import java.util.UUID
-
+/**
+ * Turns the stored markdown into a list of renderable blocks.
+ *
+ * The parser follows a pragmatic subset of CommonMark that matches what the
+ * web client (`@lexical/markdown`) does, with three deliberate improvements:
+ *
+ *  * **Continuing lines.** Consecutive non-blank lines are one paragraph with
+ *    line breaks inside it instead of one paragraph per source line. The same
+ *    is true for block quotes and list items, including "lazy" continuation
+ *    lines that are not indented.
+ *  * **Blank lines.** One blank line separates blocks; a run of two or more
+ *    leaves an explicit gap so pressing Enter twice is visible in the rendered
+ *    view.
+ *  * **Colons.** `|:---|---:|` delimiter rows are recognised (and their
+ *    alignment is rendered), links accept any scheme (`mailto:`, `tel:`,
+ *    `esper:`, relative paths), `[H:MM:SS]` timestamps are understood, and
+ *    `:shortcode:` emoji are substituted.
+ */
 object LexicalParser {
 
-    private val timestampRegex = Regex("\\[(\\d{1,2}:\\d{2})\\]")
-    private val inlineMathRegex = Regex("\\$([^$]+)\\$")
-    private val linkRegex = Regex("\\[([^\\]]+)\\]\\((https?://[^)]+)\\)")
-    private val imageRegex = Regex("^!\\[([^\\]]*)\\]\\((https?://[^)]+)\\)$")
+    private val imageBlockRegex =
+        Regex("""^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)$""")
+
+    private val orderedMarkerRegex = Regex("""^(\d{1,9})[.)]([ \t]+)(.*)$""")
+    private val bulletMarkerRegex = Regex("""^([-*+])([ \t]+)(.*)$""")
+    private val taskPrefixRegex = Regex("""^\[([ xX])]\s+(.*)$""")
+    private val delimiterCellRegex = Regex("""^:?-+:?$""")
+    private val fenceRegex = Regex("""^(`{3,}|~{3,})(.*)$""")
+    private val headingRegex = Regex("""^(#{1,6})\s+(.*)$""")
+
+    // ---------------------------------------------------------------- parsing
 
     fun parseToLexicalAst(markdown: String): List<LexicalBlockNode> {
+        val lines = markdown.split('\n')
         val blocks = mutableListOf<LexicalBlockNode>()
-        val lines = markdown.lines()
+        val listStack = mutableListOf<Int>()
         var i = 0
 
         while (i < lines.size) {
             val line = lines[i]
+
+            // ------------------------------------------------------ blank run
+            if (line.isBlank()) {
+                var run = 0
+                while (i < lines.size && lines[i].isBlank()) {
+                    run++
+                    i++
+                }
+                // A single blank line is just a block separator. Extra blank
+                // lines are authored vertical space and are kept.
+                if (blocks.isNotEmpty() && run > 1) {
+                    blocks += LexicalBlankLineNode(
+                        key = key("blank", i - run),
+                        count = (run - 1).coerceAtMost(3),
+                        lineStart = i - run,
+                        lineEnd = i - 1
+                    )
+                }
+                listStack.clear()
+                continue
+            }
+
             val trimmed = line.trim()
+            val indent = leadingWidth(line)
 
-            // Calculate indentation level (supports both 2-space and 4-space markdown indents)
-            val leadingSpaces = line.takeWhile { it == ' ' || it == '\t' }
-                .fold(0) { count, char -> if (char == '\t') count + 4 else count + 1 }
-            val indentLevel = (leadingSpaces / 2).coerceIn(0, 6)
+            // ------------------------------------------------------ fenced code
+            val fence = fenceRegex.matchEntire(trimmed)
+            if (fence != null) {
+                val marker = fence.groupValues[1]
+                val language = fence.groupValues[2].trim().ifEmpty { "text" }
+                val start = i
+                val body = mutableListOf<String>()
+                i++
+                while (i < lines.size) {
+                    val candidate = lines[i].trim()
+                    if (candidate.startsWith(marker.take(3))) break
+                    body += lines[i]
+                    i++
+                }
+                val end = i.coerceAtMost(lines.size - 1)
+                blocks += LexicalCodeBlockNode(
+                    key = key("code", start),
+                    code = body.joinToString("\n"),
+                    language = language,
+                    lineStart = start,
+                    lineEnd = end
+                )
+                if (i < lines.size) i++
+                listStack.clear()
+                continue
+            }
 
-            // 1. Math Block: $$
-            if (trimmed.startsWith("$$")) {
-                val mathLines = mutableListOf<String>()
-                if (trimmed.length > 2 && trimmed.endsWith("$$") && trimmed != "$$") {
-                    // Inline single-line math block: $$E = mc^2$$
-                    mathLines.add(trimmed.removePrefix("$$").removeSuffix("$$").trim())
+            // ------------------------------------------------------ math block
+            if (trimmed.startsWith("$$") || trimmed.startsWith("\\[")) {
+                val closer = if (trimmed.startsWith("$$")) "$$" else "\\]"
+                val start = i
+                val body = mutableListOf<String>()
+                val inner = trimmed
+                    .removePrefix("$$").removePrefix("\\[")
+                    .removeSuffix("$$").removeSuffix("\\]")
+
+                val opensAndClosesOnOneLine =
+                    trimmed.length > 2 && trimmed.endsWith(closer)
+
+                if (opensAndClosesOnOneLine) {
+                    body += inner.trim()
                 } else {
                     i++
-                    while (i < lines.size && !lines[i].trim().endsWith("$$")) {
-                        mathLines.add(lines[i])
+                    while (i < lines.size && !lines[i].trim().endsWith(closer)) {
+                        body += lines[i]
                         i++
                     }
                 }
-                blocks.add(
-                    LexicalMathBlockNode(
-                        key = UUID.randomUUID().toString(),
-                        latex = mathLines.joinToString("\n")
-                    )
+                val end = i.coerceAtMost(lines.size - 1)
+                blocks += LexicalMathBlockNode(
+                    key = key("math", start),
+                    latex = body.joinToString("\n").trim('\n'),
+                    lineStart = start,
+                    lineEnd = end
                 )
-                i++
+                if (i < lines.size) i++
+                listStack.clear()
                 continue
             }
 
-            // 2. Code Block: ```
-            if (trimmed.startsWith("```")) {
-                val startLine = i
-                val lang = trimmed.removePrefix("```").trim().ifEmpty { "text" }
-                val codeLines = mutableListOf<String>()
+            // ------------------------------------------------------ horizontal rule
+            if (isHorizontalRule(trimmed)) {
+                blocks += LexicalHorizontalRuleNode(
+                    key = key("hr", i), lineStart = i, lineEnd = i
+                )
                 i++
-                while (i < lines.size && !lines[i].trim().startsWith("```")) {
-                    codeLines.add(lines[i])
-                    i++
+                listStack.clear()
+                continue
+            }
+
+            // ------------------------------------------------------ image
+            val image = imageBlockRegex.matchEntire(trimmed)
+            if (image != null) {
+                blocks += LexicalImageNode(
+                    key = key("img", i),
+                    altText = image.groupValues[1],
+                    imageUrl = image.groupValues[2],
+                    lineStart = i,
+                    lineEnd = i
+                )
+                i++
+                listStack.clear()
+                continue
+            }
+
+            // ------------------------------------------------------ heading
+            val heading = headingRegex.matchEntire(trimmed)
+            if (heading != null) {
+                blocks += LexicalHeadingNode(
+                    key = key("h", i),
+                    level = heading.groupValues[1].length,
+                    inlines = inlinesOf(listOf(heading.groupValues[2])),
+                    lineStart = i,
+                    lineEnd = i
+                )
+                i++
+                listStack.clear()
+                continue
+            }
+
+            // ------------------------------------------------------ table
+            if (isTableStart(lines, i)) {
+                val start = i
+                val headers = splitCells(lines[i])
+                val alignments = splitCells(lines[i + 1]).map { cell ->
+                    when {
+                        cell.startsWith(":") && cell.endsWith(":") -> LexicalColumnAlignment.CENTER
+                        cell.startsWith(":") -> LexicalColumnAlignment.LEFT
+                        cell.endsWith(":") -> LexicalColumnAlignment.RIGHT
+                        else -> LexicalColumnAlignment.NONE
+                    }
                 }
-                // `i` now points at the closing fence (or past the last line).
-                val endLine = i
-                blocks.add(
-                    LexicalCodeBlockNode(
-                        key = UUID.randomUUID().toString(),
-                        code = codeLines.joinToString("\n"),
-                        language = lang,
-                        lineStartIndex = startLine,
-                        lineEndIndex = endLine
-                    )
-                )
-                i++
-                continue
-            }
-
-            // 3. Embedded Image: ![alt](url)
-            val imgMatch = imageRegex.matchEntire(trimmed)
-            if (imgMatch != null) {
-                blocks.add(
-                    LexicalImageNode(
-                        key = UUID.randomUUID().toString(),
-                        altText = imgMatch.groupValues[1],
-                        imageUrl = imgMatch.groupValues[2]
-                    )
-                )
-                i++
-                continue
-            }
-
-            // 4. Horizontal Rule: ---, ***, ___
-            if (trimmed == "---" || trimmed == "***" || trimmed == "___") {
-                blocks.add(LexicalHorizontalRuleNode(key = UUID.randomUUID().toString()))
-                i++
-                continue
-            }
-
-            // 5. Headings: # to ######
-            if (trimmed.startsWith("#")) {
-                val level = trimmed.takeWhile { it == '#' }.length.coerceIn(1, 6)
-                if (trimmed.length > level && trimmed[level] == ' ') {
-                    blocks.add(
-                        LexicalHeadingNode(
-                            key = UUID.randomUUID().toString(),
-                            level = level,
-                            inlines = parseInlineNodes(trimmed.substring(level).trim())
-                        )
-                    )
-                    i++
-                    continue
-                }
-            }
-
-            // 6. Blockquote: >
-            if (trimmed.startsWith(">")) {
-                blocks.add(
-                    LexicalQuoteNode(
-                        key = UUID.randomUUID().toString(),
-                        inlines = parseInlineNodes(trimmed.removePrefix(">").trim())
-                    )
-                )
-                i++
-                continue
-            }
-
-            // 7. Checkbox Tasks: - [ ] or - [x] (preserving indentation)
-            if (trimmed.startsWith("- [ ] ") || trimmed.startsWith("- [x] ")) {
-                val isChecked = trimmed.startsWith("- [x] ")
-                val content = trimmed.substring(6).trim()
-                blocks.add(
-                    LexicalListItemNode(
-                        key = UUID.randomUUID().toString(),
-                        isOrdered = false,
-                        indexNumber = null,
-                        indentLevel = indentLevel,
-                        isTask = true,
-                        isChecked = isChecked,
-                        inlines = parseInlineNodes(content)
-                    )
-                )
-                i++
-                continue
-            }
-
-            // 8. Bullet Lists: - , * , or + (preserving indentation)
-            if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("+ ")) {
-                blocks.add(
-                    LexicalListItemNode(
-                        key = UUID.randomUUID().toString(),
-                        isOrdered = false,
-                        indexNumber = null,
-                        indentLevel = indentLevel,
-                        inlines = parseInlineNodes(trimmed.substring(2).trim())
-                    )
-                )
-                i++
-                continue
-            }
-
-            // 9. Ordered Lists: 1. , 2. etc (preserving indentation)
-            val orderedMatch = Regex("^(\\d+)\\.\\s+(.*)$").matchEntire(trimmed)
-            if (orderedMatch != null) {
-                val num = orderedMatch.groupValues[1].toIntOrNull() ?: 1
-                val content = orderedMatch.groupValues[2]
-                blocks.add(
-                    LexicalListItemNode(
-                        key = UUID.randomUUID().toString(),
-                        isOrdered = true,
-                        indexNumber = num,
-                        indentLevel = indentLevel,
-                        inlines = parseInlineNodes(content)
-                    )
-                )
-                i++
-                continue
-            }
-
-            // 10. Table: | col1 | col2 |
-            if (trimmed.startsWith("|") && trimmed.endsWith("|") && i + 1 < lines.size && lines[i + 1].contains("---")) {
-                val headers = trimmed.split("|").map { it.trim() }.filter { it.isNotEmpty() }
-                i += 2 // skip header + divider
+                i += 2
                 val rows = mutableListOf<List<String>>()
-                while (i < lines.size && lines[i].trim().startsWith("|")) {
-                    val rowCells = lines[i].split("|").map { it.trim() }.filter { it.isNotEmpty() }
-                    rows.add(rowCells)
+                while (i < lines.size && lines[i].trim().contains('|') && lines[i].isNotBlank()) {
+                    val cells = splitCells(lines[i])
+                    // Pad short rows so the renderer can rely on the column count.
+                    rows += List(headers.size) { index -> cells.getOrElse(index) { "" } }
                     i++
                 }
-                blocks.add(
-                    LexicalTableNode(
-                        key = UUID.randomUUID().toString(),
-                        headers = headers,
-                        rows = rows
-                    )
+                blocks += LexicalTableNode(
+                    key = key("table", start),
+                    headers = headers,
+                    rows = rows,
+                    alignments = alignments,
+                    lineStart = start,
+                    lineEnd = i - 1
+                )
+                listStack.clear()
+                continue
+            }
+
+            // ------------------------------------------------------ block quote
+            if (trimmed.startsWith(">")) {
+                val start = i
+                val content = mutableListOf<String>()
+                while (i < lines.size) {
+                    val candidate = lines[i]
+                    if (candidate.isBlank()) break
+                    val candidateTrimmed = candidate.trimStart()
+                    when {
+                        candidateTrimmed.startsWith(">") -> {
+                            content += candidateTrimmed.removePrefix(">").removePrefix(" ")
+                            i++
+                        }
+                        // Lazy continuation: a plain line keeps the quote going.
+                        !startsNewBlock(lines, i) -> {
+                            content += candidate.trimStart()
+                            i++
+                        }
+                        else -> break
+                    }
+                }
+                blocks += LexicalQuoteNode(
+                    key = key("quote", start),
+                    inlines = inlinesOf(content),
+                    lineStart = start,
+                    lineEnd = i - 1
+                )
+                listStack.clear()
+                continue
+            }
+
+            // ------------------------------------------------------ list item
+            val marker = parseListMarker(line)
+            if (marker != null) {
+                val start = i
+                val content = mutableListOf(marker.content)
+                i++
+
+                // Continuation lines: indented lines and lazy (non-block-start)
+                // lines belong to this item, not to a new paragraph.
+                while (i < lines.size) {
+                    val candidate = lines[i]
+                    if (candidate.isBlank()) break
+                    val candidateIndent = leadingWidth(candidate)
+                    val candidateMarker = parseListMarker(candidate)
+                    if (candidateMarker != null) break // sibling or child item
+                    if (startsNewBlock(lines, i)) break
+                    if (candidateIndent > marker.indent) {
+                        content += stripIndent(candidate, marker.contentColumn)
+                        i++
+                    } else if (!startsNewBlock(lines, i)) {
+                        // Lazy continuation (CommonMark allows it for lists).
+                        content += candidate.trimStart()
+                        i++
+                    } else {
+                        break
+                    }
+                }
+
+                while (listStack.isNotEmpty() && marker.contentColumn < listStack.last()) {
+                    listStack.removeAt(listStack.lastIndex)
+                }
+                if (listStack.isEmpty() || marker.contentColumn > listStack.last()) {
+                    listStack.add(marker.contentColumn)
+                }
+                val level = (listStack.size - 1).coerceAtLeast(0)
+
+                blocks += LexicalListItemNode(
+                    key = key("li", start),
+                    isOrdered = marker.ordered,
+                    indexNumber = marker.number,
+                    indentLevel = level,
+                    isTask = marker.task,
+                    isChecked = marker.checked,
+                    inlines = inlinesOf(content),
+                    lineStart = start,
+                    lineEnd = i - 1,
+                    contentColumn = marker.contentColumn,
+                    marker = marker.marker,
+                    indentPrefix = marker.indentPrefix
                 )
                 continue
             }
 
-            // 11. Normal Paragraph
-            if (trimmed.isNotEmpty()) {
-                blocks.add(
-                    LexicalParagraphNode(
-                        key = UUID.randomUUID().toString(),
-                        inlines = parseInlineNodes(trimmed)
-                    )
-                )
+            // ------------------------------------------------------ paragraph
+            val start = i
+            val content = mutableListOf<String>()
+            while (i < lines.size) {
+                val candidate = lines[i]
+                if (candidate.isBlank()) break
+                if (content.isNotEmpty() && startsNewBlock(lines, i)) break
+                // Keep trailing whitespace: two trailing spaces are a hard
+                // break and must survive until inlinesOf() reads them.
+                content += stripLeadingSpaces(candidate, max = 3)
+                i++
             }
-            i++
+            if (content.isEmpty()) {
+                // Defensive: never let a non-empty line be dropped.
+                content += trimmed
+                i++
+            }
+            blocks += LexicalParagraphNode(
+                key = key("p", start),
+                inlines = inlinesOf(content),
+                lineStart = start,
+                lineEnd = i - 1
+            )
+            listStack.clear()
         }
 
         return blocks
     }
 
-    fun parseInlineNodes(text: String): List<LexicalInlineNode> {
+    /** Backwards-compatible alias used by older call sites and tests. */
+    fun parseInlineNodes(text: String): List<LexicalInlineNode> = LexicalInline.toNodes(text)
+
+    // ------------------------------------------------------------- block tests
+
+    private fun isHorizontalRule(trimmed: String): Boolean {
+        if (trimmed.length < 3) return false
+        val ch = trimmed[0]
+        if (ch != '-' && ch != '*' && ch != '_') return false
+        if (trimmed.any { it != ch && it != ' ' && it != '\t' }) return false
+        return trimmed.count { it == ch } >= 3
+    }
+
+    private fun isFence(trimmed: String): Boolean =
+        trimmed.startsWith("```") || trimmed.startsWith("~~~")
+
+    private fun isMathFence(trimmed: String): Boolean =
+        trimmed.startsWith("$$") || trimmed.startsWith("\\[")
+
+    private fun startsNewBlock(lines: List<String>, index: Int): Boolean {
+        if (index !in lines.indices) return true
+        val line = lines[index]
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) return true
+        if (isFence(trimmed) || isMathFence(trimmed)) return true
+        if (isHorizontalRule(trimmed)) return true
+        if (headingRegex.matches(trimmed)) return true
+        if (trimmed.startsWith(">")) return true
+        if (parseListMarker(line) != null) return true
+        if (imageBlockRegex.matches(trimmed)) return true
+        if (isTableStart(lines, index)) return true
+        return false
+    }
+
+    private fun isTableStart(lines: List<String>, index: Int): Boolean {
+        if (index + 1 >= lines.size) return false
+        val header = lines[index]
+        val delimiter = lines[index + 1]
+        if (!header.contains('|') || !delimiter.contains('|')) return false
+        if (!delimiter.contains('-')) return false
+        val cells = splitCells(delimiter)
+        if (cells.isEmpty()) return false
+        return cells.all { delimiterCellRegex.matches(it) }
+    }
+
+    private fun splitCells(line: String): List<String> {
+        var text = line.trim()
+        if (text.startsWith("|")) text = text.substring(1)
+        if (text.endsWith("|")) text = text.dropLast(1)
+        if (text.isEmpty()) return emptyList()
+        return text.split('|').map { it.trim() }
+    }
+
+    // -------------------------------------------------------------- list items
+
+    private data class ListMarker(
+        val indent: Int,
+        val contentColumn: Int,
+        val ordered: Boolean,
+        val number: Int?,
+        val content: String,
+        val task: Boolean,
+        val checked: Boolean,
+        val marker: String,
+        val indentPrefix: String
+    )
+
+    private fun parseListMarker(line: String): ListMarker? {
+        val indent = leadingWidth(line)
+        val indentEnd = indexAfterIndent(line)
+        val body = line.substring(indentEnd)
+        if (body.isEmpty()) return null
+
+        val ordered = orderedMarkerRegex.matchEntire(body)
+        val bullet = if (ordered == null) bulletMarkerRegex.matchEntire(body) else null
+        val match = ordered ?: bullet ?: return null
+
+        val markerCharLength = if (ordered != null) {
+            ordered.groupValues[1].length + 1 // digits + "." or ")"
+        } else {
+            1
+        }
+        val spacing = match.groupValues[2].length
+        var content = match.groupValues[3]
+        val contentColumn = indent + markerCharLength + spacing
+
+        var task = false
+        var checked = false
+        val taskMatch = taskPrefixRegex.matchEntire(content)
+        if (taskMatch != null) {
+            task = true
+            checked = taskMatch.groupValues[1].equals("x", ignoreCase = true)
+            content = taskMatch.groupValues[2]
+        }
+
+        return ListMarker(
+            indent = indent,
+            contentColumn = contentColumn,
+            ordered = ordered != null,
+            number = ordered?.groupValues?.get(1)?.toIntOrNull(),
+            content = content,
+            task = task,
+            checked = checked,
+            marker = body.substring(0, markerCharLength + spacing),
+            indentPrefix = line.substring(0, indentEnd)
+        )
+    }
+
+    // ------------------------------------------------------------ inline nodes
+
+    /**
+     * Converts the content lines of one block into inline nodes, inserting a
+     * line break between lines. A line ending in two spaces or a backslash
+     * produces a hard break.
+     */
+    private fun inlinesOf(lines: List<String>): List<LexicalInlineNode> {
         val result = mutableListOf<LexicalInlineNode>()
-        var cursor = 0
-
-        while (cursor < text.length) {
-            val tsMatch = timestampRegex.find(text, cursor)
-            val mathMatch = inlineMathRegex.find(text, cursor)
-            val linkMatch = linkRegex.find(text, cursor)
-
-            val earliest = listOfNotNull(tsMatch, mathMatch, linkMatch).minByOrNull { it.range.first }
-
-            if (earliest == null) {
-                result.addAll(parseStyling(text.substring(cursor)))
-                break
+        lines.forEachIndexed { index, line ->
+            if (index > 0) {
+                result += LexicalLineBreakNode(isHard = hasHardBreak(lines[index - 1]))
             }
-
-            if (earliest.range.first > cursor) {
-                result.addAll(parseStyling(text.substring(cursor, earliest.range.first)))
-            }
-
-            when (earliest) {
-                tsMatch -> {
-                    val fullTs = tsMatch.groupValues[1]
-                    val parts = fullTs.split(":")
-                    val s = (parts[0].toIntOrNull() ?: 0) * 60 + (parts[1].toIntOrNull() ?: 0)
-                    result.add(LexicalTimestampNode(rawText = "[$fullTs]", seconds = s))
-                }
-                mathMatch -> {
-                    result.add(LexicalInlineMathNode(latex = mathMatch.groupValues[1]))
-                }
-                linkMatch -> {
-                    result.add(LexicalLinkNode(text = linkMatch.groupValues[1], url = linkMatch.groupValues[2]))
-                }
-            }
-            cursor = earliest.range.last + 1
+            result += LexicalInline.toNodes(stripHardBreak(line))
         }
         return result
     }
 
-    private fun parseStyling(segment: String): List<LexicalInlineNode> {
-        val list = mutableListOf<LexicalInlineNode>()
-        val strikeRegex = Regex("~~([^~]+)~~")
-        val boldRegex = Regex("\\*\\*([^*]+)\\*\\*")
-        val italicRegex = Regex("\\*([^*]+)\\*")
-        val codeRegex = Regex("`([^`]+)`")
+    private fun hasHardBreak(line: String): Boolean =
+        line.endsWith("  ") || line.endsWith("\\")
 
-        var idx = 0
-        while (idx < segment.length) {
-            val strike = strikeRegex.find(segment, idx)
-            val bold = boldRegex.find(segment, idx)
-            val italic = italicRegex.find(segment, idx)
-            val code = codeRegex.find(segment, idx)
+    private fun stripHardBreak(line: String): String = when {
+        line.endsWith("\\") -> line.dropLast(1)
+        line.endsWith("  ") -> line.trimEnd()
+        else -> line
+    }
 
-            val match = listOfNotNull(strike, bold, italic, code).minByOrNull { it.range.first }
-            if (match == null) {
-                list.add(LexicalTextNode(segment.substring(idx)))
-                break
+    // -------------------------------------------------------------- utilities
+
+    private fun key(type: String, line: Int): String = "$type@$line"
+
+    private fun leadingWidth(line: String): Int {
+        var width = 0
+        for (char in line) {
+            when (char) {
+                ' ' -> width++
+                '\t' -> width += 4
+                else -> return width
             }
-
-            if (match.range.first > idx) {
-                list.add(LexicalTextNode(segment.substring(idx, match.range.first)))
-            }
-
-            when (match) {
-                strike -> list.add(LexicalTextNode(strike.groupValues[1], isStrikethrough = true))
-                bold -> list.add(LexicalTextNode(bold.groupValues[1], isBold = true))
-                italic -> list.add(LexicalTextNode(italic.groupValues[1], isItalic = true))
-                code -> list.add(LexicalTextNode(code.groupValues[1], isCode = true))
-            }
-            idx = match.range.last + 1
         }
-        return list
+        return width
+    }
+
+    private fun indexAfterIndent(line: String): Int {
+        var index = 0
+        while (index < line.length && (line[index] == ' ' || line[index] == '\t')) index++
+        return index
+    }
+
+    /** Drops up to [max] leading spaces, the way CommonMark ignores minor indentation. */
+    private fun stripLeadingSpaces(line: String, max: Int): String {
+        var index = 0
+        while (index < line.length && index < max && line[index] == ' ') index++
+        return line.substring(index)
+    }
+
+    private fun stripIndent(line: String, columns: Int): String {
+        var width = 0
+        var index = 0
+        while (index < line.length && width < columns) {
+            when (line[index]) {
+                ' ' -> width++
+                '\t' -> width += 4
+                else -> return line.substring(index)
+            }
+            index++
+        }
+        return line.substring(index)
     }
 }

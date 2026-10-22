@@ -29,6 +29,8 @@ object CodeSyntaxHighlighter {
         "javascript" to "JavaScript",
         "typescript" to "TypeScript",
         "java" to "Java",
+        "kotlin" to "Kotlin",
+        "php" to "PHP",
         "csharp" to "C#",
         "go" to "Go",
         "bash" to "Bash",
@@ -51,6 +53,8 @@ object CodeSyntaxHighlighter {
         "javascript", "js" -> "javascript"
         "typescript", "ts" -> "typescript"
         "java" -> "java"
+        "kotlin", "kt", "kts" -> "kotlin"
+        "php" -> "php"
         "c#", "csharp", "cs" -> "csharp"
         "go", "golang" -> "go"
         "bash", "sh", "shell" -> "bash"
@@ -147,6 +151,44 @@ object CodeSyntaxHighlighter {
         "rm", "cp", "mv", "ls", "grep", "sed", "awk", "curl", "wget", "sudo", "bun", "npm", "node"
     )
 
+    private val kotlinKeywords = setOf(
+        "package", "import", "class", "interface", "object", "fun", "val", "var",
+        "when", "if", "else", "for", "while", "do", "return", "break", "continue",
+        "try", "catch", "finally", "throw", "is", "as", "in", "out", "by", "where",
+        "init", "constructor", "companion", "data", "sealed", "enum", "annotation",
+        "open", "final", "abstract", "override", "private", "protected", "internal",
+        "public", "lateinit", "const", "suspend", "inline", "noinline", "crossinline",
+        "reified", "operator", "infix", "tailrec", "external", "vararg", "typealias",
+        "get", "set", "this", "super", "companion", "expect", "actual", "value"
+    )
+
+    private val kotlinTypes = setOf(
+        "String", "Int", "Long", "Double", "Float", "Boolean", "Char", "Byte",
+        "Short", "Any", "Unit", "Nothing", "List", "MutableList", "Set", "MutableSet",
+        "Map", "MutableMap", "Array", "IntArray", "Pair", "Triple", "Sequence",
+        "Flow", "CoroutineScope", "Job", "Deferred", "State", "MutableState"
+    )
+
+    private val phpKeywords = setOf(
+        "abstract", "and", "array", "as", "break", "callable", "case", "catch",
+        "class", "clone", "const", "continue", "declare", "default", "do", "echo",
+        "else", "elseif", "empty", "enddeclare", "endfor", "endforeach", "endif",
+        "endswitch", "endwhile", "enum", "extends", "final", "finally", "fn", "for",
+        "foreach", "function", "global", "goto", "if", "implements", "include",
+        "include_once", "instanceof", "insteadof", "interface", "isset", "list",
+        "match", "namespace", "new", "or", "print", "private", "protected", "public",
+        "readonly", "require", "require_once", "return", "static", "switch", "throw",
+        "trait", "try", "unset", "use", "var", "while", "xor", "yield"
+    )
+
+    private val phpTypes = setOf(
+        "int", "float", "string", "bool", "void", "mixed", "array", "object",
+        "callable", "iterable", "never", "self", "parent", "static"
+    )
+
+    /** Kotlin raw strings open with three quotes; spelled out so the regex below stays readable. */
+    private const val RAW = "\"\"\""
+
     /**
      * True when the next non-whitespace character after [endIndexExclusive] is
      * an opening parenthesis, i.e. the identifier just matched is a call.
@@ -168,6 +210,8 @@ object CodeSyntaxHighlighter {
             "python" -> highlightPython(code)
             "rust" -> highlightRust(code)
             "javascript", "typescript" -> highlightJs(code)
+            "kotlin" -> highlightKotlin(code)
+            "php" -> highlightPhp(code)
             "sql" -> highlightSql(code)
             "json" -> highlightJson(code)
             "bash" -> highlightBash(code)
@@ -336,6 +380,92 @@ object CodeSyntaxHighlighter {
                         isFollowedByCallParen(code, range.last + 1) -> {
                             withStyle(SpanStyle(color = FunctionColor)) { append(ident) }
                         }
+                        else -> withStyle(SpanStyle(color = DefaultTextColor)) { append(ident) }
+                    }
+                }
+                op.isNotEmpty() -> withStyle(SpanStyle(color = OperatorColor)) { append(op) }
+                punct.isNotEmpty() -> withStyle(SpanStyle(color = PunctuationColor)) { append(punct) }
+                else -> append(match.value)
+            }
+            lastIdx = range.last + 1
+        }
+        if (lastIdx < code.length) append(code.substring(lastIdx))
+    }
+
+    private fun highlightKotlin(code: String): AnnotatedString = buildAnnotatedString {
+        val pattern = Regex(
+            """(//[^\n]*|/\*[\s\S]*?\*/)|""" +                        // 1: comment
+            """($RAW[\s\S]*?$RAW|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|""" + // 2: string / char
+            """(@[A-Za-z_]\w*)|""" +                                     // 3: annotation
+            """(\b-?(?:0x[0-9a-fA-F_]+|\d[\d_]*(?:\.\d+)?)[fFlLuU]*\b)|""" + // 4: number
+            """(\b[a-zA-Z_]\w*\b)|""" +                                 // 5: identifier
+            """(->|::|==|!=|<=|>=|&&|\|\||\+\+|--|[+\-*/%=<>&|^~!?:])|""" + // 6: operator
+            """([{}()\[\];,.])"""                                      // 7: punctuation
+        )
+
+        var lastIdx = 0
+        for (match in pattern.findAll(code)) {
+            val range = match.range
+            if (range.first > lastIdx) append(code.substring(lastIdx, range.first))
+            val (comment, str, annotation, num, ident, op, punct) = match.destructured
+
+            when {
+                comment.isNotEmpty() -> withStyle(SpanStyle(color = CommentColor, fontStyle = FontStyle.Italic)) { append(comment) }
+                str.isNotEmpty() -> withStyle(SpanStyle(color = StringColor)) { append(str) }
+                annotation.isNotEmpty() -> withStyle(SpanStyle(color = PreprocessorColor, fontWeight = FontWeight.SemiBold)) { append(annotation) }
+                num.isNotEmpty() -> withStyle(SpanStyle(color = NumberColor)) { append(num) }
+                ident.isNotEmpty() -> {
+                    when {
+                        ident in kotlinKeywords -> withStyle(SpanStyle(color = KeywordColor, fontWeight = FontWeight.SemiBold)) { append(ident) }
+                        ident in kotlinTypes -> withStyle(SpanStyle(color = ClassTypeColor)) { append(ident) }
+                        ident == "true" || ident == "false" || ident == "null" ->
+                            withStyle(SpanStyle(color = BooleanColor, fontWeight = FontWeight.SemiBold)) { append(ident) }
+                        isFollowedByCallParen(code, range.last + 1) ->
+                            withStyle(SpanStyle(color = FunctionColor)) { append(ident) }
+                        else -> withStyle(SpanStyle(color = DefaultTextColor)) { append(ident) }
+                    }
+                }
+                op.isNotEmpty() -> withStyle(SpanStyle(color = OperatorColor)) { append(op) }
+                punct.isNotEmpty() -> withStyle(SpanStyle(color = PunctuationColor)) { append(punct) }
+                else -> append(match.value)
+            }
+            lastIdx = range.last + 1
+        }
+        if (lastIdx < code.length) append(code.substring(lastIdx))
+    }
+
+    private fun highlightPhp(code: String): AnnotatedString = buildAnnotatedString {
+        val pattern = Regex(
+            """(//[^\n]*|#[^\n]*|/\*[\s\S]*?\*/)|""" +                 // 1: comment
+            """('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")|""" +             // 2: string
+            """(<\?php|<\?=|\?>)|""" +                                  // 3: open/close tag
+            """(\$[A-Za-z_]\w*)|""" +                                    // 4: variable
+            """(\b-?\d+(?:\.\d+)?\b)|""" +                              // 5: number
+            """(\b[a-zA-Z_]\w*\b)|""" +                                 // 6: identifier
+            """(->|::|=>|==|!=|<=|>=|&&|\|\||[+\-*/%=<>&|^~!?:.])|""" +   // 7: operator
+            """([{}()\[\];,])"""                                       // 8: punctuation
+        )
+
+        var lastIdx = 0
+        for (match in pattern.findAll(code)) {
+            val range = match.range
+            if (range.first > lastIdx) append(code.substring(lastIdx, range.first))
+            val (comment, str, tag, variable, num, ident, op, punct) = match.destructured
+
+            when {
+                comment.isNotEmpty() -> withStyle(SpanStyle(color = CommentColor, fontStyle = FontStyle.Italic)) { append(comment) }
+                str.isNotEmpty() -> withStyle(SpanStyle(color = StringColor)) { append(str) }
+                tag.isNotEmpty() -> withStyle(SpanStyle(color = PreprocessorColor, fontWeight = FontWeight.Bold)) { append(tag) }
+                variable.isNotEmpty() -> withStyle(SpanStyle(color = ClassTypeColor)) { append(variable) }
+                num.isNotEmpty() -> withStyle(SpanStyle(color = NumberColor)) { append(num) }
+                ident.isNotEmpty() -> {
+                    when {
+                        ident.lowercase() in phpKeywords -> withStyle(SpanStyle(color = KeywordColor, fontWeight = FontWeight.SemiBold)) { append(ident) }
+                        ident.lowercase() in phpTypes -> withStyle(SpanStyle(color = ClassTypeColor)) { append(ident) }
+                        ident.lowercase() == "true" || ident.lowercase() == "false" || ident.lowercase() == "null" ->
+                            withStyle(SpanStyle(color = BooleanColor, fontWeight = FontWeight.SemiBold)) { append(ident) }
+                        isFollowedByCallParen(code, range.last + 1) ->
+                            withStyle(SpanStyle(color = FunctionColor)) { append(ident) }
                         else -> withStyle(SpanStyle(color = DefaultTextColor)) { append(ident) }
                     }
                 }
