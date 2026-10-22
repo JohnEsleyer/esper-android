@@ -315,6 +315,10 @@ fun LiveTextField(
         val newCaret = start + replacement.length
         value = TextFieldValue(updated, TextRange(newCaret))
         onTextCommitted(updated)
+        // The strip lives outside the field, so tapping it takes focus away
+        // and closes the keyboard. Put the caret straight back where it was.
+        focusRequester.requestFocus()
+        keyboard?.show()
     }
 
     // Hand the query to the editor so the strip can be drawn above the IME
