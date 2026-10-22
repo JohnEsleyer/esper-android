@@ -35,6 +35,7 @@ along the way, including a crash on a trailing colon.
 | Display math | KaTeX WebView | KaTeX WebView | KaTeX |
 | Tables / task lists / images | Raw text | Rendered | Raw text (unsupported) |
 | Raw markdown escape hatch | The only editor | Toolbar toggle ("Live" ↔ raw) | n/a |
+| Paste a ChatGPT answer | Flattened into one line | Parsed into headings, lists, fences, tables, math | Block replacement on paste |
 
 ---
 
@@ -187,11 +188,50 @@ PHP), plus aliases `kt`/`kts` and `php`, and appear in the language picker.
 All grammars are pure `Regex` + `AnnotatedString` — no new dependency, and the
 palette is the web's `editor-dark` values.
 
-### 3.5 Debug playground (debug builds only)
+### 3.5 Markdown paste (`LexicalSource.kt`, `LexicalLiveTextField.kt`)
+
+A rendered-block editor has a paste problem the raw textarea never had: the blocks are
+rendered, but the caret lives in a one-block field whose text is *stripped* of its
+marker (`# `, `- `, `> `). Dropping a ChatGPT answer in that field would have written
+it as the content of one heading or one bullet.
+
+The flow now is:
+
+1. `pastedMarkdownIn(oldText, newText, selection, keepsNewlines)` compares the before
+   and after text of `BasicTextField` and returns the inserted substring when the
+   change is a paste of Markdown. It is a pure function, so `MarkdownPasteTest` covers
+   the fragile offset arithmetic without a device or a clipboard.
+   - Multi-line inserts count as a paste even when the lines are plain prose.
+   - A single word or a single Enter is normal typing (Enter still splits the block).
+   - Code blocks, math and quotes opt out via `LexicalSource.keepsNewlines`: their
+     newlines are literal, so a paste belongs *inside* them.
+2. The field calls `onPasteMarkdown` instead of committing, and the editor calls
+   `LexicalSource.insertMarkdownAtBlock`. That replaces the block's own marker line
+   with the pasted text (blank lines around it), so the paste is parsed at document
+   level. Pasting a `# Heading` into a bullet produces a heading, not a bullet
+   containing a `#`. An inline paste (`**bold**`, a link) is spliced into the sentence
+   instead, and a blank or starter block is replaced outright.
+3. `revealLine` clears `editingKey`/`editingCaret`, which drops out of inline
+   composition, and asks the `LazyListState` to scroll to the first block at or after
+   the insertion line. The document re-parses on the same frame.
+4. When nothing is being edited, a **Paste** chip in the toolbar
+   (`LexicalToolbar(onPaste = …)`) appends the clipboard through
+   `LexicalSource.appendMarkdown`, and tapping the empty space under the note focuses
+   the trailing paragraph so a long-press paste has a caret to land on.
+
+Block shapes covered by `LexicalSourceTest` (`a chatgpt shaped answer parses into rich
+blocks`): `##`/`###` headings, ordered and bullet lists, `- [x]` tasks, a fenced
+`kotlin` block, a `|:---|---:|` table, a quote and `$$…$$` display math — one paste,
+eight node types.
+
+### 3.6 Debug playground (debug builds only)
 
 `app/src/debug/java/com/esper/android/debug/LexicalPlaygroundActivity.kt` renders a
 document containing every supported construct from in-memory markdown, with
-"Show source" and "Reset". It is in the `debug` source set, so it cannot ship.
+"Show source", "Reset" and "Copy chat sample". The last one puts a realistic ChatGPT
+answer on the clipboard, so the paste path can be tested without leaving the app: tap
+the empty space under the note (or the toolbar **Paste** chip), then long-press and
+paste. It is in the `debug` source set, so it cannot ship.
 
 It exists because the alternative was typing test text into a real notebook that
 syncs to the server. Launch it with:
@@ -280,6 +320,10 @@ For a future pass, these are real defects found while reading it:
   (`splitBlock` keeps the tail, inserts the blank line, returns the focus line) and
   the crash it used to trigger now has its own test, but a one-minute manual check is
   still worth doing.
+* **Markdown paste was not exercised on the device** after the toolbar chip and the
+  empty-space target were added; the paste detector, the insert/replace logic and the
+  parse result are unit-tested, but one manual paste of a real ChatGPT answer into
+  `LexicalPlaygroundActivity` is the remaining check.
 * `displayOffsetToRaw` is approximate around timestamps, because the rendered chip
   (`" ▶ 00:42 "`) is wider than the `[00:42]` it replaces. Tapping inside a timestamp
   chip therefore lands a couple of characters off. Low impact: the chip is a link in
@@ -297,10 +341,11 @@ For a future pass, these are real defects found while reading it:
 | Improve `:` | Table alignment delimiters parse (`\|:---\|:---:\|---:\|`), any-scheme links (`mailto:`, `tel:`, relative), `[H:MM:SS]` chips, `:shortcode:` emoji with a live strip — plus the `activeEmojiQuery` crash fix |
 | Improve the look of rendered code | Kotlin/PHP grammars, language chip with background + picker, header chrome (line count, copy, delete), h1–h6 scale, tight list rhythm, styled quotes, aligned/zebra tables, calmer inline-math chip |
 | Real-time rendered WYSIWYG instead of markdown ↔ rendered toggling | Rendered-by-default with tap-to-edit per block, marker-revealing `VisualTransformation` with exact offset mapping, Enter split, multi-line paste, terminal emoji insert, raw markdown kept only as an escape hatch |
+| Paste a ChatGPT answer | `pastedMarkdownIn` detects the paste, `insertMarkdownAtBlock` replaces the block marker so the paste parses at document level, toolbar Paste + empty-space target for when no field has focus |
 | Improve the web app | Not changed — it is already live Lexical. Defects listed in §5 for a later pass. |
 
-**Verification:** `./gradlew --offline :app:testDebugUnitTest` → **153 tests, 0
+**Verification:** `./gradlew --offline :app:testDebugUnitTest` → **175 tests, 0
 failures** (`LexicalParserTest`, `LexicalSourceTest`, `LexicalInlineTest`,
-`CodeBlockTest`); `:app:assembleDebug` clean; smoke-tested on device via the debug
-playground. The editor work landed in `b047f65`; the focus fix below and this report
+`CodeBlockTest`, `MarkdownPasteTest`); `:app:assembleDebug` clean; smoke-tested on
+device via the debug playground. The editor work landed in `b047f65`; the focus fix below and this report
 were made afterwards.

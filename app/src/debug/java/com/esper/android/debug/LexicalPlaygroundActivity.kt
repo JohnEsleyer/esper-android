@@ -1,5 +1,8 @@
 package com.esper.android.debug
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -22,6 +25,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -59,6 +63,7 @@ private fun Playground() {
     // The editor owns its text after the first composition, so a reset has to
     // recreate it rather than hand it a new value.
     var resetKey by remember { mutableStateOf(0) }
+    val context = LocalContext.current
 
     Column(modifier = Modifier.background(Color(0xFF0A0A0F))) {
         key(resetKey) {
@@ -93,6 +98,18 @@ private fun Playground() {
                 }
             )
             Text(
+                text = "Copy chat sample",
+                color = Color(0xFF818CF8),
+                fontSize = 12.sp,
+                modifier = Modifier.clickable {
+                    val clipboard =
+                        context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(
+                        ClipData.newPlainText("ChatGPT answer", ChatGptSample)
+                    )
+                }
+            )
+            Text(
                 text = "${markdown.length} chars",
                 color = Color(0xFF6B7280),
                 fontSize = 12.sp
@@ -118,6 +135,42 @@ private fun Playground() {
         }
     }
 }
+
+/**
+ * What ChatGPT actually returns: Markdown with a blank line between blocks.
+ * Copied to the clipboard by "Copy chat sample" so the real paste path
+ * (IME paste → `onValueChange` → `insertMarkdownAtBlock`) can be tested on a
+ * device; the newline handling is the interesting part.
+ */
+private val ChatGptSample = """
+## Why Kotlin Coroutines Beat Threads
+
+Coroutines are **cooperative**, so they do not block a thread.
+
+### Key points
+
+1. Cheap to create
+2. Structured concurrency
+3. Cancellation is cooperative
+
+- [x] suspending functions
+- [ ] `Flow` backpressure
+
+```kotlin
+suspend fun greet() = println("hi")
+```
+
+| Concept | Cost |
+|:---|---:|
+| Thread | 1 MB |
+| Coroutine | ~100 B |
+
+> Structured concurrency keeps children scoped.
+
+${'$'}${'$'}
+O(n \log n)
+${'$'}${'$'}
+""".trimIndent()
 
 /**
  * Deliberately dense: every block type the parser knows about, plus the inline

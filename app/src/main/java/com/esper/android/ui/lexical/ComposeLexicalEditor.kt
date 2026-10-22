@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -236,6 +237,11 @@ fun ComposeLexicalEditor(
     var editingCaret by remember { mutableStateOf<Int?>(null) }
     var focusLine by remember { mutableStateOf<Int?>(null) }
 
+    val listState = rememberLazyListState()
+    // Source line a paste landed on; the list scrolls there once the document
+    // has been re-parsed so the user sees what they just pasted.
+    var scrollToLine by remember { mutableStateOf<Int?>(null) }
+
     val colors = remember { lexicalInlineColors() }
     // Shared with the focused field; the `:` strip is drawn at the bottom of
     // the screen so the IME cannot hide it.
@@ -276,6 +282,59 @@ fun ComposeLexicalEditor(
         if (readOnly) return
         editingCaret = caret
         editingKey = block.key
+    }
+
+    /** Leaves the inline field and scrolls the rendered result into view. */
+    fun revealLine(line: Int) {
+        editingKey = null
+        editingCaret = null
+        scrollToLine = line.coerceAtLeast(0)
+    }
+
+    /**
+     * Markdown pasted while a block is being edited.
+     *
+     * The pasted text replaces the block's marker line rather than being
+     * prefixed by it, so a whole ChatGPT answer becomes headings, lists,
+     * fences and tables instead of a nested quote or one long paragraph.
+     */
+    fun handleMarkdownPaste(
+        pastedContent: String,
+        block: LexicalBlockNode,
+        selection: TextRange,
+        blockText: String
+    ) {
+        if (readOnly) return
+        val updated = LexicalSource.insertMarkdownAtBlock(
+            currentMarkdown = textState.value,
+            block = block,
+            pastedMarkdown = pastedContent,
+            currentSelection = selection,
+            currentBlockText = blockText
+        )
+        if (updated == textState.value) return
+        commitText(updated)
+        fieldValue = TextFieldValue(updated, TextRange(updated.length))
+        revealLine(block.lineStart)
+    }
+
+    /** Toolbar Paste: at the edited block when there is one, else at the end. */
+    fun pasteClipboardText(clipText: String) {
+        if (readOnly) return
+        val anchor = blocks.firstOrNull { it.key == editingKey }
+        val updated = if (anchor != null && LexicalSource.canEditInPlace(anchor)) {
+            LexicalSource.insertMarkdownAtBlock(
+                currentMarkdown = textState.value,
+                block = anchor,
+                pastedMarkdown = clipText
+            )
+        } else {
+            LexicalSource.appendMarkdown(textState.value, clipText)
+        }
+        if (updated == textState.value) return
+        commitText(updated)
+        fieldValue = TextFieldValue(updated, TextRange(updated.length))
+        revealLine(anchor?.lineStart ?: textState.value.count { it == '\n' })
     }
 
     /** Toolbar actions insert after the block being edited, or at the end. */
@@ -359,6 +418,14 @@ fun ComposeLexicalEditor(
         list
     }
 
+    // Scroll to freshly pasted content once it exists as blocks.
+    LaunchedEffect(scrollToLine, blocks) {
+        val line = scrollToLine ?: return@LaunchedEffect
+        val index = displayBlocks.indexOfFirst { it.lineStart >= line }
+        if (index >= 0) listState.animateScrollToItem(index)
+        scrollToLine = null
+    }
+
     // After a split, hand editing over to the block that was just created so
     // the caret continues on the new line without any extra tap.
     LaunchedEffect(focusLine, blocks) {
@@ -387,7 +454,8 @@ fun ComposeLexicalEditor(
                 }
                 isRawEditMode = !isRawEditMode
             },
-            onAction = { action -> commitToolbarAction(action) }
+            onAction = { action -> commitToolbarAction(action) },
+            onPaste = { clip -> pasteClipboardText(clip) }
         )
 
         HorizontalDivider(color = BorderSlate.copy(alpha = 0.5f), thickness = 1.dp)
@@ -414,6 +482,7 @@ fun ComposeLexicalEditor(
                 )
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp)
                 ) {
@@ -437,6 +506,9 @@ fun ComposeLexicalEditor(
                                 focusLine = focusLine,
                                 tapToEditAnywhere = tapToEditAnywhere,
                                 suggestionsHost = emojiSuggestions,
+                                onPasteMarkdown = { pasted, target, selection, text ->
+                                    handleMarkdownPaste(pasted, target, selection, text)
+                                },
                                 onRequestEdit = { target, caret -> requestEdit(target, caret) },
                                 onFocusLost = {
                                     if (editingKey == block.key) {
@@ -470,6 +542,25 @@ fun ComposeLexicalEditor(
                                 }
                             )
                         }
+                    }
+
+                    // Empty space under the note is a target: tapping it edits
+                    // the trailing paragraph, which is where a paste lands.
+                    item(key = "tail-space") {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(240.dp)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) {
+                                    val target = displayBlocks.lastOrNull() ?: return@clickable
+                                    val length =
+                                        LexicalSource.editableText(rawText, target).length
+                                    requestEdit(target, length)
+                                }
+                        )
                     }
                 }
             }
@@ -535,6 +626,7 @@ private fun LiveBlock(
     focusLine: Int?,
     tapToEditAnywhere: Boolean,
     suggestionsHost: EmojiSuggestionHost,
+    onPasteMarkdown: (String, LexicalBlockNode, TextRange, String) -> Unit,
     onRequestEdit: (LexicalBlockNode, Int) -> Unit,
     onFocusLost: () -> Unit,
     onFocusConsumed: () -> Unit,
@@ -600,6 +692,7 @@ private fun LiveBlock(
                     onFocusLost = onFocusLost,
                     onTimestampClicked = onTimestampClicked,
                     suggestions = suggestionsHost,
+                    onPasteMarkdown = onPasteMarkdown,
                     onTextCommitted = onTextCommitted,
                     onSplit = onSplit
                 )
@@ -692,6 +785,7 @@ private fun LiveBlock(
                 onFocusLost = onFocusLost,
                 onTimestampClicked = onTimestampClicked,
                 suggestions = suggestionsHost,
+                onPasteMarkdown = onPasteMarkdown,
                 onTextCommitted = onTextCommitted,
                 onSplit = onSplit,
                 modifier = Modifier.weight(1f)
@@ -779,6 +873,7 @@ private fun LiveBlock(
                     onFocusLost = onFocusLost,
                     onTimestampClicked = onTimestampClicked,
                     suggestions = suggestionsHost,
+                    onPasteMarkdown = onPasteMarkdown,
                     onTextCommitted = onTextCommitted,
                     onSplit = onSplit,
                     modifier = Modifier.weight(1f)
@@ -807,6 +902,7 @@ private fun LiveBlock(
             onFocusLost = onFocusLost,
             onTimestampClicked = onTimestampClicked,
             suggestions = suggestionsHost,
+            onPasteMarkdown = onPasteMarkdown,
             onTextCommitted = onTextCommitted,
             onSplit = onSplit
         )
@@ -836,7 +932,8 @@ private fun EditableBlockText(
     onTextCommitted: (String) -> Unit,
     onSplit: (String, Int) -> Unit,
     modifier: Modifier = Modifier,
-    suggestions: EmojiSuggestionHost? = null
+    suggestions: EmojiSuggestionHost? = null,
+    onPasteMarkdown: (String, LexicalBlockNode, TextRange, String) -> Unit = { _, _, _, _ -> }
 ) {
     if (!readOnly && isEditing) {
         LiveTextField(
@@ -854,6 +951,9 @@ private fun EditableBlockText(
             placeholder = placeholder,
             onFocusLost = onFocusLost,
             suggestions = suggestions,
+            onPasteMarkdown = { pasted, selection, text ->
+                onPasteMarkdown(pasted, block, selection, text)
+            },
             modifier = modifier
         )
         return
@@ -1252,8 +1352,10 @@ fun LexicalToolbar(
     isRawMode: Boolean,
     onToggleMode: () -> Unit,
     onAction: (LexicalAction) -> Unit,
-    readOnly: Boolean = false
+    readOnly: Boolean = false,
+    onPaste: ((String) -> Unit)? = null
 ) {
+    val context = LocalContext.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1281,6 +1383,22 @@ fun LexicalToolbar(
         )
 
         if (!readOnly) {
+            if (onPaste != null) {
+                ToolbarBtn(
+                    label = "Paste",
+                    accent = EmeraldSync,
+                    onClick = {
+                        val clipboard =
+                            context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = clipboard.primaryClip
+                            ?.takeIf { it.itemCount > 0 }
+                            ?.getItemAt(0)
+                            ?.coerceToText(context)
+                            ?.toString()
+                        if (!clip.isNullOrBlank()) onPaste(clip)
+                    }
+                )
+            }
             ToolbarBtn(label = "H1", onClick = { onAction(LexicalAction.AddH1) })
             ToolbarBtn(label = "H2", onClick = { onAction(LexicalAction.AddH2) })
             ToolbarBtn(label = "B", fontWeight = FontWeight.Bold, onClick = { onAction(LexicalAction.AddBold) })

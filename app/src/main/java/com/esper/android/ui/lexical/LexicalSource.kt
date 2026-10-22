@@ -1,5 +1,7 @@
 package com.esper.android.ui.lexical
 
+import androidx.compose.ui.text.TextRange
+
 /**
  * Reads and writes a single block's text inside the full markdown document.
  *
@@ -27,6 +29,170 @@ object LexicalSource {
             block is LexicalMathBlockNode ||
             // A quote is one continuous block: its lines are line breaks.
             block is LexicalQuoteNode
+
+    // ------------------------------------------------------- markdown pasting
+
+    /**
+     * Text a starter document ships with; treated as empty so a paste replaces
+     * it instead of being appended underneath it.
+     */
+    private val STARTER_PLACEHOLDERS = setOf(
+        "Start writing notes...",
+        "Jot down ideas and quick thoughts here..."
+    )
+
+    private fun isPlaceholder(text: String): Boolean =
+        text.isBlank() || text.trim() in STARTER_PLACEHOLDERS
+
+    /**
+     * True when [text] looks like Markdown rather than prose.
+     *
+     * Used to decide whether a paste should be parsed into blocks (and leave
+     * the inline field) or simply typed into the current block. Multi-line
+     * text always qualifies: ChatGPT and friends answer in Markdown, and even
+     * a plain multi-line answer reads better as separate lines than as one
+     * run-on line.
+     */
+    fun isMarkdownFormatting(text: String): Boolean {
+        if (text.contains('\n')) return true
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return false
+        if (trimmed.startsWith("#") ||
+            trimmed.startsWith(">") ||
+            trimmed.startsWith("- ") ||
+            trimmed.startsWith("* ") ||
+            trimmed.startsWith("+ ") ||
+            trimmed.startsWith("```") ||
+            trimmed.startsWith("~~~") ||
+            trimmed.startsWith("$$") ||
+            trimmed.startsWith("\\[") ||
+            trimmed.startsWith("|") ||
+            trimmed.startsWith("---") ||
+            trimmed.startsWith("***") ||
+            trimmed.startsWith("___")
+        ) return true
+        if (Regex("""^\d+[.)]\s""").containsMatchIn(trimmed)) return true
+        if (Regex("""^[-*+]\s+\[[ xX]\]""").containsMatchIn(trimmed)) return true
+        return INLINE_MARKDOWN_REGEX.containsMatchIn(trimmed)
+    }
+
+    /**
+     * True when the pasted text owns whole lines (a heading, fence, table, …)
+     * rather than sitting inside a sentence.
+     */
+    private fun isBlockMarkdown(text: String): Boolean {
+        if (text.contains('\n')) return true
+        val trimmed = text.trim()
+        return trimmed.startsWith("#") ||
+            trimmed.startsWith(">") ||
+            trimmed.startsWith("- ") ||
+            trimmed.startsWith("* ") ||
+            trimmed.startsWith("+ ") ||
+            trimmed.startsWith("```") ||
+            trimmed.startsWith("~~~") ||
+            trimmed.startsWith("$$") ||
+            trimmed.startsWith("\\[") ||
+            trimmed.startsWith("|") ||
+            trimmed.startsWith("---") ||
+            trimmed.startsWith("***") ||
+            trimmed.startsWith("___") ||
+            Regex("""^\d+[.)]\s""").containsMatchIn(trimmed) ||
+            Regex("""^[-*+]\s+\[[ xX]\]""").containsMatchIn(trimmed)
+    }
+
+    /** Inline constructs that are worth rendering even when pasted on one line. */
+    private val INLINE_MARKDOWN_REGEX = Regex(
+        """(\*\*[^*]+\*\*)|(__[^_]+__)|(~~[^~]+~~)|(`[^`]+`)|(\$[^$]+\$)|(\[[^\]]+\]\([^)]+\))"""
+    )
+
+    /**
+     * Inserts pasted Markdown where the caret is, replacing the block's own
+     * marker line so the paste is parsed at document level.
+     *
+     * A list item or a quote would otherwise swallow the paste: every line of
+     * it would inherit `- ` or `> ` and turn into text (or a nested fence)
+     * instead of headings and code blocks. Replacing the block's lines outright
+     * means the same paste renders identically whether it lands in a paragraph,
+     * a heading or a bullet.
+     */
+    fun insertMarkdownAtBlock(
+        currentMarkdown: String,
+        block: LexicalBlockNode,
+        pastedMarkdown: String,
+        currentSelection: TextRange? = null,
+        currentBlockText: String? = null
+    ): String {
+        val pasted = trimBlankEdges(pastedMarkdown)
+        if (pasted.isEmpty()) return currentMarkdown
+
+        val blockText = currentBlockText ?: editableText(currentMarkdown, block)
+
+        // Pasting into an empty note should produce exactly the pasted note,
+        // not a leading blank line above it.
+        if (currentMarkdown.isBlank() && isPlaceholder(blockText)) return pasted
+
+        val lines = currentMarkdown.split('\n').toMutableList()
+        val start = block.lineStart.coerceIn(0, lines.size)
+        val endExclusive = if (block.lineStart >= lines.size) {
+            start
+        } else {
+            (block.lineEnd + 1).coerceIn(start, lines.size)
+        }
+
+        val replacement: List<String> = if (isPlaceholder(blockText)) {
+            pasted.split('\n')
+        } else {
+            val sel = currentSelection ?: TextRange(blockText.length)
+            val from = minOf(sel.start, sel.end).coerceIn(0, blockText.length)
+            val to = maxOf(sel.start, sel.end).coerceIn(from, blockText.length)
+            val before = blockText.substring(0, from)
+            val after = blockText.substring(to)
+
+            if (!isBlockMarkdown(pasted)) {
+                // Inline paste (a word, a link, `**bold**`): splice it in and
+                // keep the sentence intact.
+                listOf(before + pasted + after)
+            } else {
+                buildList {
+                    // Blank lines on both sides so the paste becomes its own
+                    // blocks instead of joining the surrounding paragraph.
+                    if (before.isNotBlank()) {
+                        addAll(before.trimEnd().split('\n'))
+                        add("")
+                    }
+                    addAll(pasted.split('\n'))
+                    if (after.isNotBlank()) {
+                        add("")
+                        addAll(after.trimStart().split('\n'))
+                    }
+                }
+            }
+        }
+
+        lines.subList(start, endExclusive).clear()
+        lines.addAll(start, replacement)
+        return lines.joinToString("\n")
+    }
+
+    /** Appends pasted Markdown at the end of the document as its own blocks. */
+    fun appendMarkdown(currentMarkdown: String, pastedMarkdown: String): String {
+        val pasted = trimBlankEdges(pastedMarkdown)
+        if (pasted.isEmpty()) return currentMarkdown
+        val existing = currentMarkdown.trimEnd()
+        if (existing.isBlank()) return pasted
+        return "$existing\n\n$pasted"
+    }
+
+    /** Drops leading/trailing blank lines without touching the body. */
+    private fun trimBlankEdges(text: String): String {
+        val lines = text.replace("\r\n", "\n").replace('\r', '\n').split('\n')
+        var first = 0
+        var last = lines.lastIndex
+        while (first <= last && lines[first].isBlank()) first++
+        while (last >= first && lines[last].isBlank()) last--
+        if (first > last) return ""
+        return lines.subList(first, last + 1).joinToString("\n")
+    }
 
     /**
      * The editable text of [block]: the content without the structural marker

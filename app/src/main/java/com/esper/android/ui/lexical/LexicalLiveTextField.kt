@@ -259,7 +259,8 @@ fun LiveTextField(
     showEmojiPicker: Boolean = true,
     suggestions: EmojiSuggestionHost? = null,
     initialCaret: Int? = null,
-    onFocusLost: () -> Unit = {}
+    onFocusLost: () -> Unit = {},
+    onPasteMarkdown: ((pasted: String, selection: TextRange, blockText: String) -> Unit)? = null
 ) {
     var value by remember(block.key) {
         val caret = (initialCaret ?: initialText.length).coerceIn(0, initialText.length)
@@ -348,7 +349,16 @@ fun LiveTextField(
                 val singleEnter = newText.length == oldText.length + 1 && newBreaks == oldBreaks + 1
                 val keepsNewlines = LexicalSource.keepsNewlines(block)
 
+                // A Markdown paste leaves this field and is parsed as blocks,
+                // so a ChatGPT answer renders instead of being flattened to one
+                // line. Code, math and quotes keep their newlines literally.
+                val pastedMarkdown =
+                    pastedMarkdownIn(oldText, newText, value.selection, keepsNewlines)
+
                 when {
+                    pastedMarkdown != null && onPasteMarkdown != null -> {
+                        onPasteMarkdown(pastedMarkdown, value.selection, oldText)
+                    }
                     // Enter on a prose block splits it into a new block; on an
                     // empty list item it leaves the list. Use the IME's own
                     // newline twice (a blank line) for a full paragraph break.
@@ -416,6 +426,40 @@ fun LiveTextField(
                 onPick = { shortcode -> insertShortcode(shortcode) }
             )
         }
+    }
+}
+
+/**
+ * The Markdown that was just pasted into [oldText], or null when the change is
+ * ordinary typing.
+ *
+ * `keepsNewlines` blocks (code, math, quotes) never intercept: their newlines
+ * are literal, so a paste belongs inside the block.
+ */
+internal fun pastedMarkdownIn(
+    oldText: String,
+    newText: String,
+    selection: TextRange,
+    keepsNewlines: Boolean
+): String? {
+    if (keepsNewlines) return null
+    if (newText.length <= oldText.length) return null
+
+    val from = minOf(selection.start, selection.end).coerceIn(0, oldText.length)
+    val to = maxOf(selection.start, selection.end).coerceIn(from, oldText.length)
+    val delta = newText.length - (oldText.length - (to - from))
+    if (delta <= 0 || from + delta > newText.length) return null
+    val inserted = newText.substring(from, from + delta)
+
+    val oldBreaks = oldText.count { it == '\n' }
+    val newBreaks = newText.count { it == '\n' }
+    val singleEnter = newText.length == oldText.length + 1 && newBreaks == oldBreaks + 1
+    val grewLines = newBreaks > oldBreaks && !singleEnter
+
+    return when {
+        grewLines -> inserted
+        delta > 1 && LexicalSource.isMarkdownFormatting(inserted) -> inserted
+        else -> null
     }
 }
 

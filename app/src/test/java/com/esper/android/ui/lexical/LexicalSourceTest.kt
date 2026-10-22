@@ -4,6 +4,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import androidx.compose.ui.text.TextRange
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 /**
@@ -16,6 +18,14 @@ class LexicalSourceTest {
 
     private fun blockOf(markdown: String, index: Int = 0): LexicalBlockNode =
         LexicalParser.parseToLexicalAst(markdown)[index]
+
+    /** The empty paragraph the editor keeps at the end of a document. */
+    private fun tailParagraph(markdown: String) = LexicalParagraphNode(
+        key = "p@tail",
+        inlines = emptyList(),
+        lineStart = markdown.split('\n').size,
+        lineEnd = markdown.split('\n').size
+    )
 
     // ------------------------------------------------------------- reading
 
@@ -217,5 +227,221 @@ class LexicalSourceTest {
 
         assertNull(LexicalSource.splitBlock(markdown, block, "x", 1))
         assertTrue(LexicalSource.keepsNewlines(block))
+    }
+
+    // --------------------------------------------------------- markdown paste
+
+    @Test
+    fun `markdown formatting is detected for block and inline syntax`() {
+        assertTrue(LexicalSource.isMarkdownFormatting("# Title"))
+        assertTrue(LexicalSource.isMarkdownFormatting("- a\n- b"))
+        assertTrue(LexicalSource.isMarkdownFormatting("```kotlin\nval x = 1\n```"))
+        assertTrue(LexicalSource.isMarkdownFormatting("| a | b |\n|---|---|"))
+        assertTrue(LexicalSource.isMarkdownFormatting("> quoted"))
+        assertTrue(LexicalSource.isMarkdownFormatting("$$\nx^2\n$$"))
+        assertTrue(LexicalSource.isMarkdownFormatting("---"))
+        assertTrue(LexicalSource.isMarkdownFormatting("- [x] done"))
+        assertTrue(LexicalSource.isMarkdownFormatting("1. first"))
+        assertTrue(LexicalSource.isMarkdownFormatting("a **bold** word"))
+        assertTrue(LexicalSource.isMarkdownFormatting("a `code` word"))
+        assertTrue(LexicalSource.isMarkdownFormatting("[x](https://e.co)"))
+        assertTrue(LexicalSource.isMarkdownFormatting("energy is ${'$'}E = mc^2${'$'} here"))
+        assertTrue(LexicalSource.isMarkdownFormatting("plain\nmultiline"))
+    }
+
+    @Test
+    fun `plain prose is not treated as markdown`() {
+        assertFalse(LexicalSource.isMarkdownFormatting("Just a sentence."))
+        assertFalse(LexicalSource.isMarkdownFormatting(""))
+        assertFalse(LexicalSource.isMarkdownFormatting("   "))
+    }
+
+    @Test
+    fun `pasting into an empty note replaces it`() {
+        val markdown = ""
+        val block = tailParagraph(markdown)
+
+        val updated = LexicalSource.insertMarkdownAtBlock(
+            currentMarkdown = markdown,
+            block = block,
+            pastedMarkdown = "# Title\n\nBody"
+        )
+
+        assertEquals("# Title\n\nBody", updated)
+    }
+
+    @Test
+    fun `pasting into a paragraph keeps the surrounding text as its own blocks`() {
+        val markdown = "Intro."
+        val block = blockOf(markdown)
+
+        val updated = LexicalSource.insertMarkdownAtBlock(
+            currentMarkdown = markdown,
+            block = block,
+            pastedMarkdown = "## Heading\n\n- item",
+            currentBlockText = "Intro."
+        )
+
+        val parsed = LexicalParser.parseToLexicalAst(updated)
+        assertEquals(3, parsed.size)
+        assertTrue(parsed[0] is LexicalParagraphNode)
+        assertTrue(parsed[1] is LexicalHeadingNode)
+        assertTrue(parsed[2] is LexicalListItemNode)
+    }
+
+    @Test
+    fun `pasting an ordered list item becomes its own list`() {
+        val markdown = "Intro."
+
+        val updated = LexicalSource.insertMarkdownAtBlock(
+            currentMarkdown = markdown,
+            block = blockOf(markdown),
+            pastedMarkdown = "1. first\n2. second",
+            currentBlockText = "Intro."
+        )
+
+        val parsed = LexicalParser.parseToLexicalAst(updated)
+        assertTrue(parsed[0] is LexicalParagraphNode)
+        assertEquals(2, parsed.count { it is LexicalListItemNode })
+    }
+
+    @Test
+    fun `pasting inline math keeps the sentence and renders a chip`() {
+        val markdown = "Energy is TBD."
+
+        val updated = LexicalSource.insertMarkdownAtBlock(
+            currentMarkdown = markdown,
+            block = blockOf(markdown),
+            pastedMarkdown = "${'$'}E = mc^2${'$'}",
+            currentSelection = TextRange(10, 13),
+            currentBlockText = "Energy is TBD."
+        )
+
+        assertEquals("Energy is ${'$'}E = mc^2${'$'}.", updated)
+        val parsed = LexicalParser.parseToLexicalAst(updated)
+        assertTrue(
+            (parsed.first() as LexicalParagraphNode).inlines.any {
+                it is LexicalInlineMathNode
+            }
+        )
+    }
+
+    @Test
+    fun `pasting over a selection replaces only that part`() {
+        val markdown = "Keep THIS tail."
+        val block = blockOf(markdown)
+
+        val updated = LexicalSource.insertMarkdownAtBlock(
+            currentMarkdown = markdown,
+            block = block,
+            pastedMarkdown = "new",
+            currentSelection = TextRange(5, 9),
+            currentBlockText = "Keep THIS tail."
+        )
+
+        assertEquals("Keep new tail.", updated)
+    }
+
+    @Test
+    fun `pasting into a list item does not inherit the bullet`() {
+        val markdown = "- existing"
+        val block = blockOf(markdown)
+
+        val updated = LexicalSource.insertMarkdownAtBlock(
+            currentMarkdown = markdown,
+            block = block,
+            pastedMarkdown = "# Heading\n\n```js\nx\n```"
+        )
+
+        val parsed = LexicalParser.parseToLexicalAst(updated)
+        assertFalse(parsed.any { it is LexicalListItemNode })
+        assertTrue(parsed.any { it is LexicalHeadingNode })
+        assertTrue(parsed.any { it is LexicalCodeBlockNode })
+    }
+
+    @Test
+    fun `pasting into the trailing paragraph appends after a table`() {
+        val markdown = "| a | b |\n|---|---|\n| 1 | 2 |"
+
+        val updated = LexicalSource.insertMarkdownAtBlock(
+            currentMarkdown = markdown,
+            block = tailParagraph(markdown),
+            pastedMarkdown = "## Notes\n\nDone."
+        )
+
+        assertEquals("$markdown\n## Notes\n\nDone.", updated)
+        val parsed = LexicalParser.parseToLexicalAst(updated)
+        assertTrue(parsed.any { it is LexicalTableNode })
+        assertTrue(parsed.any { it is LexicalHeadingNode && it.level == 2 })
+    }
+
+    @Test
+    fun `pasting into a trailing paragraph keeps it below a list`() {
+        val markdown = "- a\n- b"
+
+        val updated = LexicalSource.insertMarkdownAtBlock(
+            currentMarkdown = markdown,
+            block = tailParagraph(markdown),
+            pastedMarkdown = "```kotlin\nval x = 1\n```"
+        )
+
+        val parsed = LexicalParser.parseToLexicalAst(updated)
+        assertEquals(2, parsed.count { it is LexicalListItemNode })
+        assertTrue(parsed.any { it is LexicalCodeBlockNode })
+    }
+
+    @Test
+    fun `appending to an empty document drops the separator`() {
+        assertEquals("# Title", LexicalSource.appendMarkdown("", "# Title"))
+        assertEquals("# A\n\n# B", LexicalSource.appendMarkdown("# A\n", "\n# B\n"))
+    }
+
+    @Test
+    fun `a chatgpt shaped answer parses into rich blocks`() {
+        val answer = """
+            ## Why Kotlin Coroutines Beat Threads
+
+            Coroutines are **cooperative**, so they do not block a thread.
+
+            ### Key points
+
+            1. Cheap to create
+            2. Structured concurrency
+            3. Cancellation is cooperative
+
+            - [x] suspending functions
+            - [ ] `Flow` backpressure
+
+            ```kotlin
+            suspend fun greet() = println("hi")
+            ```
+
+            | Concept | Cost |
+            |:---|---:|
+            | Thread | 1 MB |
+            | Coroutine | ~100 B |
+
+            > Structured concurrency keeps children scoped.
+
+            ${'$'}${'$'}
+            O(n \log n)
+            ${'$'}${'$'}
+        """.trimIndent()
+
+        val updated = LexicalSource.insertMarkdownAtBlock(
+            currentMarkdown = "",
+            block = tailParagraph(""),
+            pastedMarkdown = answer
+        )
+        val parsed = LexicalParser.parseToLexicalAst(updated)
+
+        assertTrue(parsed.any { it is LexicalHeadingNode && it.level == 2 })
+        assertTrue(parsed.any { it is LexicalHeadingNode && it.level == 3 })
+        assertTrue(parsed.count { it is LexicalListItemNode && it.isTask && it.isChecked } == 1)
+        assertTrue(parsed.any { it is LexicalCodeBlockNode && it.language == "kotlin" })
+        assertTrue(parsed.any { it is LexicalTableNode })
+        assertTrue(parsed.any { it is LexicalQuoteNode })
+        assertTrue(parsed.any { it is LexicalMathBlockNode })
+        assertTrue(parsed.any { it is LexicalParagraphNode })
     }
 }
