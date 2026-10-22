@@ -122,7 +122,7 @@ object LexicalSource {
         currentSelection: TextRange? = null,
         currentBlockText: String? = null
     ): String {
-        val pasted = trimBlankEdges(pastedMarkdown)
+        val pasted = normalizePastedMarkdown(pastedMarkdown)
         if (pasted.isEmpty()) return currentMarkdown
 
         val blockText = currentBlockText ?: editableText(currentMarkdown, block)
@@ -176,11 +176,306 @@ object LexicalSource {
 
     /** Appends pasted Markdown at the end of the document as its own blocks. */
     fun appendMarkdown(currentMarkdown: String, pastedMarkdown: String): String {
-        val pasted = trimBlankEdges(pastedMarkdown)
+        val pasted = normalizePastedMarkdown(pastedMarkdown)
         if (pasted.isEmpty()) return currentMarkdown
         val existing = currentMarkdown.trimEnd()
         if (existing.isBlank()) return pasted
         return "$existing\n\n$pasted"
+    }
+
+    // ------------------------------------------------- markdown normalising
+
+    private val FENCE_LINE = Regex("""^(`{3,}|~{3,})""")
+    private val HEADING_LINE = Regex("""^#{1,6}[ \t]+\S""")
+    private val LIST_LINE = Regex("""^([-*+]|\d{1,9}[.)])[ \t]+\S""")
+    private val QUOTE_LINE = Regex("""^>""")
+    private val TABLE_LINE = Regex("""^\|.*\|$""")
+    private val RULE_LINE = Regex("""^(-{3,}|\*{3,}|_{3,})$""")
+
+    /**
+     * Rebuilds block structure in text pasted from a chat client.
+     *
+     * Gemini and ChatGPT copy as *flattened* Markdown: one line per paragraph,
+     * single newlines between everything, no blank lines, bullets as `" * x"`,
+     * and code as an unfenced `fn main() {` followed by indented lines. Fed
+     * straight to the parser that is one long paragraph, which is what "paste
+     * does not render" looked like on the device.
+     *
+     * The rules are deliberately conservative:
+     * - prose lines that end a sentence (or are full width) become paragraphs;
+     * - short prose lines without punctuation are joined to the next line, so a
+     *   hard-wrapped answer does not turn into one paragraph per visual line;
+     * - fenced input is copied verbatim, two trailing spaces keep a hard break.
+     *
+     * Only pasted text goes through this; the document being typed keeps its
+     * own soft-break semantics.
+     */
+    fun normalizePastedMarkdown(text: String): String {
+        val source = text.replace("\r\n", "\n").replace('\r', '\n').replace('\u00A0', ' ')
+        val lines = source.split('\n')
+        val out = mutableListOf<String>()
+        // Heading inference only makes sense for a whole pasted answer, not for
+        // a two-word line pasted into a sentence.
+        val inferHeadings = lines.count { it.isNotBlank() } >= 5
+        var inFence = false
+        // Display math is a fence too: its body must not be split into
+        // paragraphs by the rules below.
+        var inMath = false
+        var i = 0
+
+        fun blankBefore() {
+            if (out.isNotEmpty() && out.last().isNotBlank()) out.add("")
+        }
+
+        while (i < lines.size) {
+            val rawLine = lines[i]
+            val line = rawLine.trimEnd()
+            val trimmed = line.trim()
+
+            if (inMath) {
+                out.add(line)
+                if (trimmed == "$$" || trimmed == "\\]") inMath = false
+                i++
+                continue
+            }
+
+            if (trimmed == "$$" || trimmed == "\\[") {
+                blankBefore()
+                out.add(trimmed)
+                inMath = true
+                i++
+                continue
+            }
+
+            if (inFence) {
+                out.add(line)
+                if (FENCE_LINE.containsMatchIn(trimmed)) inFence = false
+                i++
+                continue
+            }
+
+            if (trimmed.isEmpty()) {
+                out.add("")
+                i++
+                continue
+            }
+
+            if (FENCE_LINE.containsMatchIn(trimmed)) {
+                blankBefore()
+                out.add(trimmed)
+                inFence = true
+                i++
+                continue
+            }
+
+            // "fn main() {" + indented body -> a real fenced code block.
+            if (opensCodeBlock(trimmed) && isIndented(lines, i + 1)) {
+                val (run, next) = readCodeRun(lines, i)
+                blankBefore()
+                out.add("```" + sniffLanguage(run.joinToString("\n")))
+                out.addAll(run)
+                out.add("```")
+                i = next
+                continue
+            }
+
+            // A run of bare code lines (`val x = 1` / `let y = 2`) is code too.
+            if (looksLikeCodeLine(trimmed) &&
+                i + 1 < lines.size &&
+                looksLikeCodeLine(lines[i + 1])
+            ) {
+                val run = mutableListOf<String>()
+                var j = i
+                while (j < lines.size) {
+                    val candidate = lines[j].trimEnd()
+                    if (candidate.isBlank()) {
+                        if (run.isEmpty() || run.last().isBlank()) break
+                        run.add("")
+                        j++
+                        continue
+                    }
+                    if (!looksLikeCodeLine(candidate)) break
+                    run.add(candidate.trim())
+                    j++
+                }
+                while (run.isNotEmpty() && run.last().isBlank()) run.removeAt(run.lastIndex)
+                if (run.size >= 2) {
+                    blankBefore()
+                    out.add("```" + sniffLanguage(run.joinToString("\n")))
+                    out.addAll(run)
+                    out.add("```")
+                    i = j
+                    continue
+                }
+            }
+
+            if (isBlockLine(trimmed)) {
+                // Keep consecutive list items, table rows and quote lines
+                // together; every other block gets air around it.
+                if (!sameFamily(out.lastOrNull(), trimmed)) blankBefore()
+                out.add(trimmed)
+                i++
+                continue
+            }
+
+            if (inferHeadings &&
+                isHeadline(trimmed) &&
+                out.lastOrNull()?.isBlank() != false
+            ) {
+                blankBefore()
+                out.add("## $trimmed")
+                i++
+                continue
+            }
+
+            val previous = out.lastOrNull()
+            if (previous != null && previous.endsWith("  ")) {
+                // Explicit Markdown hard break: stay inside the paragraph.
+                out[out.lastIndex] = previous + "\n" + rawLine.trimStart()
+            } else if (previous != null &&
+                previous.isNotBlank() &&
+                !isBlockLine(previous.trim()) &&
+                canJoin(previous, trimmed)
+            ) {
+                out[out.lastIndex] = previous.trimEnd() + " " + trimmed
+            } else {
+                blankBefore()
+                out.add(rawLine.trimStart())
+            }
+            i++
+        }
+
+        return out.joinToString("\n").trim()
+    }
+
+    /**
+     * A short line that stands alone between blank lines and has no sentence
+     * punctuation: how chat clients render a sub-heading without the `##`.
+     */
+    private fun isHeadline(trimmed: String): Boolean {
+        if (trimmed.length !in 3..60) return false
+        if (trimmed.last() in ".!?:;,。！？") return false
+        if (trimmed.split(' ').size > 8) return false
+        if (trimmed.firstOrNull()?.isUpperCase() != true) return false
+        if (isBlockLine(trimmed)) return false
+        return true
+    }
+
+    /** True when [trimmed] is the first line of an unfenced code block. */
+    private fun opensCodeBlock(trimmed: String): Boolean {
+        // Ignore a trailing comment: `fn f() -> usize { // note`.
+        val code = trimmed.substringBefore(" //").substringBefore("\t//").trimEnd()
+        return (code.endsWith("{") || (code.endsWith(":") && !isBlockLine(trimmed))) &&
+            code.length < 120
+    }
+
+    private fun isIndented(lines: List<String>, index: Int): Boolean {
+        val line = lines.getOrNull(index) ?: return false
+        if (line.isBlank()) return false
+        val indent = line.takeWhile { it == ' ' || it == '\t' }.length
+        return indent >= 4
+    }
+
+    /** Reads `fn main() {` plus its indented body, closing brace included. */
+    private fun readCodeRun(lines: List<String>, start: Int): Pair<List<String>, Int> {
+        val run = mutableListOf(lines[start].trim())
+        var i = start + 1
+        while (i < lines.size) {
+            val line = lines[i]
+            if (line.isBlank()) {
+                run.add("")
+                i++
+                continue
+            }
+            val indent = line.takeWhile { it == ' ' || it == '\t' }.length
+            if (indent >= 2) {
+                run.add(line.trimEnd())
+                i++
+                continue
+            }
+            if (line.trim() in CODE_CLOSERS) {
+                run.add(line.trim())
+                i++
+            }
+            break
+        }
+        while (run.isNotEmpty() && run.last().isBlank()) run.removeAt(run.lastIndex)
+        return run to i
+    }
+
+    private val CODE_CLOSERS = setOf("}", "};", "end", "fi", "done")
+
+    private fun isBlockLine(trimmed: String): Boolean =
+        HEADING_LINE.containsMatchIn(trimmed) ||
+            LIST_LINE.containsMatchIn(trimmed) ||
+            QUOTE_LINE.containsMatchIn(trimmed) ||
+            TABLE_LINE.matches(trimmed) ||
+            RULE_LINE.matches(trimmed) ||
+            trimmed.startsWith("$$") ||
+            trimmed.startsWith("\\[") ||
+            trimmed.startsWith("![")
+
+    private fun isListItem(line: String?): Boolean =
+        line != null && LIST_LINE.containsMatchIn(line.trim())
+
+    private fun sameFamily(previous: String?, trimmed: String): Boolean {
+        val p = previous?.trim() ?: return false
+        if (p.isEmpty()) return false
+        return (LIST_LINE.containsMatchIn(trimmed) && LIST_LINE.containsMatchIn(p)) ||
+            (TABLE_LINE.matches(trimmed) && TABLE_LINE.matches(p)) ||
+            (QUOTE_LINE.containsMatchIn(trimmed) && QUOTE_LINE.containsMatchIn(p))
+    }
+
+    /**
+     * Joins a hard-wrapped line to its continuation, but never a paragraph that
+     * already ended or a line that is itself a block.
+     */
+    private fun canJoin(previous: String, next: String): Boolean {
+        if (previous.endsWith("  ")) return false
+        if (previous.length >= 70) return false
+        if (previous.last() in ".!?:;\u3002\uFF01\uFF1F") return false
+        if (looksLikeCodeLine(previous) || looksLikeCodeLine(next)) return false
+        val first = next.firstOrNull() ?: return false
+        return first.isLowerCase() || first in ",)]}"
+    }
+
+    private fun looksLikeCodeLine(line: String): Boolean {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) return false
+        if (trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("<!") ||
+            trimmed.startsWith("```")
+        ) return false
+        return trimmed.endsWith(";") ||
+            trimmed.endsWith("{") ||
+            trimmed.endsWith("}") ||
+            trimmed.contains(" = ") ||
+            trimmed.contains("==") ||
+            trimmed.contains("->") ||
+            trimmed.startsWith("val ") ||
+            trimmed.startsWith("var ") ||
+            trimmed.startsWith("let ") ||
+            trimmed.startsWith("fun ") ||
+            trimmed.startsWith("fn ") ||
+            trimmed.startsWith("def ") ||
+            trimmed.startsWith("return ") ||
+            trimmed.startsWith("import ") ||
+            trimmed.startsWith("from ") ||
+            trimmed.startsWith("#include") ||
+            trimmed.startsWith("print(") ||
+            trimmed.startsWith("println!") ||
+            trimmed.startsWith("console.")
+    }
+
+    private fun sniffLanguage(code: String): String = when {
+        Regex("""\bfn\s+\w+\s*[(<]""").containsMatchIn(code) ||
+            code.contains("let mut ") ||
+            code.contains("println!") ||
+            Regex("""\buse\s+std\b""").containsMatchIn(code) -> "rust"
+        Regex("""\bfun\s+\w+\s*[(<]""").containsMatchIn(code) -> "kotlin"
+        Regex("""(?m)^\s*(def|class)\s+\w+""").containsMatchIn(code) -> "python"
+        code.contains("console.log") || code.contains("=>") -> "javascript"
+        code.contains("System.out") || Regex("""\bpublic\s+(final\s+)?class\b""").containsMatchIn(code) -> "java"
+        else -> ""
     }
 
     /** Drops leading/trailing blank lines without touching the body. */

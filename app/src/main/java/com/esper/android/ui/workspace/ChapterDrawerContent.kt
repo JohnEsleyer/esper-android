@@ -149,13 +149,19 @@ fun ChapterDrawerContent(
                                     ) {
                                         Icon(Icons.Default.Add, contentDescription = "Subchapter", tint = TextMuted, modifier = Modifier.size(14.dp))
                                     }
-                                    if (pages.size > 1) {
-                                        IconButton(
-                                            onClick = { pageToDelete = page },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = RoseRuby.copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
-                                        }
+                                    // Always available: deleting the last
+                                    // chapter is allowed (the notebook keeps
+                                    // its empty state until one is added).
+                                    IconButton(
+                                        onClick = { pageToDelete = page },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = "Delete chapter",
+                                            tint = RoseRuby.copy(alpha = 0.85f),
+                                            modifier = Modifier.size(16.dp)
+                                        )
                                     }
                                 }
                             }

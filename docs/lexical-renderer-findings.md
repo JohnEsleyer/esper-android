@@ -36,6 +36,7 @@ along the way, including a crash on a trailing colon.
 | Tables / task lists / images | Raw text | Rendered | Raw text (unsupported) |
 | Raw markdown escape hatch | The only editor | Toolbar toggle ("Live" ↔ raw) | n/a |
 | Paste a ChatGPT answer | Flattened into one line | Parsed into headings, lists, fences, tables, math | Block replacement on paste |
+| Undo / redo | IME-only, per field | Document-level history, toolbar buttons, Ctrl+Z | Lexical history plugin |
 
 ---
 
@@ -343,6 +344,9 @@ For a future pass, these are real defects found while reading it:
 | Real-time rendered WYSIWYG instead of markdown ↔ rendered toggling | Rendered-by-default with tap-to-edit per block, marker-revealing `VisualTransformation` with exact offset mapping, Enter split, multi-line paste, terminal emoji insert, raw markdown kept only as an escape hatch |
 | Paste a ChatGPT answer | `pastedMarkdownIn` detects the paste, `insertMarkdownAtBlock` replaces the block marker so the paste parses at document level, toolbar Paste + empty-space target for when no field has focus |
 | Improve the web app | Not changed — it is already live Lexical. Defects listed in §5 for a later pass. |
+
+Later fixes (Gemini paste reconstruction, undo/redo, chapter delete) are in
+[`editor-issues-findings.md`](editor-issues-findings.md).
 
 **Verification:** `./gradlew --offline :app:testDebugUnitTest` → **175 tests, 0
 failures** (`LexicalParserTest`, `LexicalSourceTest`, `LexicalInlineTest`,

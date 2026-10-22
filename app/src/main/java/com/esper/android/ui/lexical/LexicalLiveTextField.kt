@@ -268,6 +268,10 @@ fun LiveTextField(
     }
     var isFocused by remember(block.key) { mutableStateOf(false) }
     var wasFocused by remember(block.key) { mutableStateOf(false) }
+    // Set once a paste has been handed to the editor: the field is about to be
+    // removed, and any further IME callback would commit stale text over the
+    // document that was just built from the paste.
+    var pasteHandled by remember(block.key) { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
 
@@ -341,7 +345,7 @@ fun LiveTextField(
         BasicTextField(
             value = value,
             onValueChange = { fresh ->
-                if (readOnly) return@BasicTextField
+                if (readOnly || pasteHandled) return@BasicTextField
                 val oldText = value.text
                 val newText = fresh.text
                 val oldBreaks = oldText.count { it == '\n' }
@@ -357,6 +361,7 @@ fun LiveTextField(
 
                 when {
                     pastedMarkdown != null && onPasteMarkdown != null -> {
+                        pasteHandled = true
                         onPasteMarkdown(pastedMarkdown, value.selection, oldText)
                     }
                     // Enter on a prose block splits it into a new block; on an
@@ -386,7 +391,10 @@ fun LiveTextField(
                     }
                     else -> {
                         value = fresh
-                        onTextCommitted(newText)
+                        // The IME re-sends the current text on focus/composition
+                        // changes; committing that would rewrite the block and,
+                        // after a paste, clobber the document.
+                        if (newText != oldText) onTextCommitted(newText)
                     }
                 }
             },

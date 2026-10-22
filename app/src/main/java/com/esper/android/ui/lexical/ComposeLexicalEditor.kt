@@ -71,6 +71,13 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -237,6 +244,14 @@ fun ComposeLexicalEditor(
     var editingCaret by remember { mutableStateOf<Int?>(null) }
     var focusLine by remember { mutableStateOf<Int?>(null) }
 
+    // Document-level undo. One entry per burst of edits: typing a word is one
+    // step, not one step per keystroke.
+    val history = remember { LexicalHistory() }
+    // Plain object, so the toolbar's enabled states need a nudge to recompose.
+    var historyRevision by remember { mutableStateOf(0) }
+    val canUndo = remember(historyRevision) { history.canUndo }
+    val canRedo = remember(historyRevision) { history.canRedo }
+
     val listState = rememberLazyListState()
     // Source line a paste landed on; the list scrolls there once the document
     // has been re-parsed so the user sees what they just pasted.
@@ -247,15 +262,47 @@ fun ComposeLexicalEditor(
     // the screen so the IME cannot hide it.
     val emojiSuggestions = remember { EmojiSuggestionHost() }
 
-    fun commitText(newText: String) {
+    /** Snapshots the current document for undo, coalescing rapid edits. */
+    fun recordHistory() {
+        history.record(textState.value)
+        historyRevision++
+    }
+
+    fun commitText(newText: String, recordHistory: Boolean = true) {
         if (readOnly) return
         if (newText == textState.value) return
+        if (recordHistory) recordHistory()
         textState.value = newText
         debounceJob?.cancel()
         debounceJob = coroutineScope.launch {
             delay(300)
             currentOnContentChanged(newText)
         }
+    }
+
+    /** Swaps the document for a history snapshot and persists it. */
+    fun applyHistory(text: String) {
+        editingKey = null
+        editingCaret = null
+        focusLine = null
+        historyRevision++
+        fieldValue = TextFieldValue(text, TextRange(text.length))
+        debounceJob?.cancel()
+        textState.value = text
+        debounceJob = coroutineScope.launch {
+            delay(300)
+            currentOnContentChanged(text)
+        }
+    }
+
+    fun undo() {
+        val previous = history.undo(textState.value) ?: return
+        applyHistory(previous)
+    }
+
+    fun redo() {
+        val next = history.redo(textState.value) ?: return
+        applyHistory(next)
     }
 
     /** Writes the edited text of one block back into the document. */
@@ -312,7 +359,12 @@ fun ComposeLexicalEditor(
             currentSelection = selection,
             currentBlockText = blockText
         )
-        if (updated == textState.value) return
+        if (updated == textState.value) {
+            // Nothing to insert, but still leave the field so it cannot be
+            // latched in "paste handled" state.
+            revealLine(block.lineStart)
+            return
+        }
         commitText(updated)
         fieldValue = TextFieldValue(updated, TextRange(updated.length))
         revealLine(block.lineStart)
@@ -365,6 +417,10 @@ fun ComposeLexicalEditor(
         textState.value = text
         fieldValue = TextFieldValue(text, TextRange(text.length))
         editingKey = null
+        // The document changed underneath us; undo across that boundary would
+        // resurrect text from another device or an older snapshot.
+        history.clear()
+        historyRevision++
     }
 
     // Synchronize external markdown changes (Room re-emissions) without ever
@@ -443,6 +499,23 @@ fun ComposeLexicalEditor(
             .fillMaxSize()
             .imePadding()
             .background(SpaceBlack)
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown || !event.isCtrlPressed) {
+                    false
+                } else {
+                    when (event.key) {
+                        Key.Z -> {
+                            if (event.isShiftPressed) redo() else undo()
+                            true
+                        }
+                        Key.Y -> {
+                            redo()
+                            true
+                        }
+                        else -> false
+                    }
+                }
+            }
     ) {
         LexicalToolbar(
             isRawMode = isRawEditMode,
@@ -455,7 +528,11 @@ fun ComposeLexicalEditor(
                 isRawEditMode = !isRawEditMode
             },
             onAction = { action -> commitToolbarAction(action) },
-            onPaste = { clip -> pasteClipboardText(clip) }
+            onPaste = { clip -> pasteClipboardText(clip) },
+            canUndo = canUndo,
+            canRedo = canRedo,
+            onUndo = { undo() },
+            onRedo = { redo() }
         )
 
         HorizontalDivider(color = BorderSlate.copy(alpha = 0.5f), thickness = 1.dp)
@@ -1353,7 +1430,11 @@ fun LexicalToolbar(
     onToggleMode: () -> Unit,
     onAction: (LexicalAction) -> Unit,
     readOnly: Boolean = false,
-    onPaste: ((String) -> Unit)? = null
+    onPaste: ((String) -> Unit)? = null,
+    canUndo: Boolean = false,
+    canRedo: Boolean = false,
+    onUndo: (() -> Unit)? = null,
+    onRedo: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     Row(
@@ -1383,6 +1464,20 @@ fun LexicalToolbar(
         )
 
         if (!readOnly) {
+            if (onUndo != null && onRedo != null) {
+                ToolbarBtn(
+                    label = "Undo",
+                    accent = if (canUndo) TextPrimary else TextMuted.copy(alpha = 0.4f),
+                    enabled = canUndo,
+                    onClick = onUndo
+                )
+                ToolbarBtn(
+                    label = "Redo",
+                    accent = if (canRedo) TextPrimary else TextMuted.copy(alpha = 0.4f),
+                    enabled = canRedo,
+                    onClick = onRedo
+                )
+            }
             if (onPaste != null) {
                 ToolbarBtn(
                     label = "Paste",
@@ -1425,10 +1520,12 @@ private fun ToolbarBtn(
     fontWeight: FontWeight = FontWeight.SemiBold,
     fontStyle: FontStyle = FontStyle.Normal,
     accent: Color = TextPrimary,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     Surface(
         onClick = onClick,
+        enabled = enabled,
         shape = RoundedCornerShape(8.dp),
         color = SurfaceSlate,
         modifier = Modifier.height(30.dp)
