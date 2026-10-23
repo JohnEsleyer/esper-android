@@ -26,7 +26,7 @@ object LexicalParser {
     private val orderedMarkerRegex = Regex("""^(\d{1,9})[.)]([ \t]+)(.*)$""")
     private val bulletMarkerRegex = Regex("""^([-*+])([ \t]+)(.*)$""")
     private val taskPrefixRegex = Regex("""^\[([ xX])]\s+(.*)$""")
-    private val delimiterCellRegex = Regex("""^:?-+:?$""")
+    private val delimiterCellRegex = Regex("""^:?\s*-+\s*:?$""")
     private val fenceRegex = Regex("""^(`{3,}|~{3,})(.*)$""")
     private val headingRegex = Regex("""^(#{1,6})\s+(.*)$""")
 
@@ -166,10 +166,11 @@ object LexicalParser {
             }
 
             // ------------------------------------------------------ table
-            if (isTableStart(lines, i)) {
+            val delimiterIdx = findDelimiterIndex(lines, i)
+            if (delimiterIdx != null) {
                 val start = i
                 val headers = splitCells(lines[i])
-                val alignments = splitCells(lines[i + 1]).map { cell ->
+                val alignments = splitCells(lines[delimiterIdx]).map { cell ->
                     when {
                         cell.startsWith(":") && cell.endsWith(":") -> LexicalColumnAlignment.CENTER
                         cell.startsWith(":") -> LexicalColumnAlignment.LEFT
@@ -177,12 +178,28 @@ object LexicalParser {
                         else -> LexicalColumnAlignment.NONE
                     }
                 }
-                i += 2
+                i = delimiterIdx + 1
                 val rows = mutableListOf<List<String>>()
-                while (i < lines.size && lines[i].trim().contains('|') && lines[i].isNotBlank()) {
+                var lastRowIndex = delimiterIdx
+                while (i < lines.size) {
+                    val candidate = lines[i].trim()
+                    if (candidate.isBlank()) {
+                        // Look ahead past blank lines to see if another table row follows
+                        var peek = i + 1
+                        while (peek < lines.size && lines[peek].isBlank()) peek++
+                        if (peek < lines.size && lines[peek].trim().contains('|') && !isTableBoundary(lines, peek)) {
+                            i = peek
+                            continue
+                        } else {
+                            break
+                        }
+                    }
+                    if (!candidate.contains('|') || isTableBoundary(lines, i)) {
+                        break
+                    }
                     val cells = splitCells(lines[i])
-                    // Pad short rows so the renderer can rely on the column count.
                     rows += List(headers.size) { index -> cells.getOrElse(index) { "" } }
+                    lastRowIndex = i
                     i++
                 }
                 blocks += LexicalTableNode(
@@ -191,7 +208,7 @@ object LexicalParser {
                     rows = rows,
                     alignments = alignments,
                     lineStart = start,
-                    lineEnd = i - 1
+                    lineEnd = lastRowIndex
                 )
                 listStack.clear()
                 continue
@@ -344,23 +361,44 @@ object LexicalParser {
         return false
     }
 
-    private fun isTableStart(lines: List<String>, index: Int): Boolean {
-        if (index + 1 >= lines.size) return false
-        val header = lines[index]
-        val delimiter = lines[index + 1]
-        if (!header.contains('|') || !delimiter.contains('|')) return false
-        if (!delimiter.contains('-')) return false
-        val cells = splitCells(delimiter)
-        if (cells.isEmpty()) return false
-        return cells.all { delimiterCellRegex.matches(it) }
-    }
+    private fun isTableStart(lines: List<String>, index: Int): Boolean =
+        findDelimiterIndex(lines, index) != null
 
     private fun splitCells(line: String): List<String> {
         var text = line.trim()
         if (text.startsWith("|")) text = text.substring(1)
         if (text.endsWith("|")) text = text.dropLast(1)
         if (text.isEmpty()) return emptyList()
-        return text.split('|').map { it.trim() }
+        return text.split(Regex("""(?<!\\)\|""")).map { it.replace("\\|", "|").trim() }
+    }
+
+    private fun findDelimiterIndex(lines: List<String>, index: Int): Int? {
+        val header = lines[index].trim()
+        if (!header.contains('|')) return null
+        if (isTableBoundary(lines, index)) return null
+        var next = index + 1
+        // Allow optional blank lines between header and delimiter
+        while (next < lines.size && lines[next].isBlank()) {
+            next++
+        }
+        if (next >= lines.size) return null
+        val delimiter = lines[next].trim()
+        if (!delimiter.contains('|') || !delimiter.contains('-')) return null
+        val cells = splitCells(delimiter)
+        if (cells.isEmpty()) return null
+        return if (cells.all { delimiterCellRegex.matches(it) }) next else null
+    }
+
+    private fun isTableBoundary(lines: List<String>, index: Int): Boolean {
+        if (index !in lines.indices) return true
+        val trimmed = lines[index].trim()
+        if (isFence(trimmed) || isMathFence(trimmed)) return true
+        if (isHorizontalRule(trimmed)) return true
+        if (headingRegex.matches(trimmed)) return true
+        if (trimmed.startsWith(">")) return true
+        if (parseListMarker(lines[index]) != null) return true
+        if (imageBlockRegex.matches(trimmed)) return true
+        return false
     }
 
     // -------------------------------------------------------------- list items

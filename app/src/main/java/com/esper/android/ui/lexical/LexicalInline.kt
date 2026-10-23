@@ -138,8 +138,8 @@ object LexicalInline {
     private const val MATH = """\$([^$\n]+)\$"""
     private const val LINK = """\[([^\]\n]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)"""
     private const val TIMESTAMP = """\[(\d{1,2}:\d{2}(?::\d{2})?)\]"""
-    private const val BOLD_STAR = """\*\*(?=\S)(.+?)(?<=\S)\*\*"""
-    private const val BOLD_UNDER = """__(?=\S)(.+?)(?<=\S)__"""
+    private const val BOLD_STAR = """(\*{2,})(?=\S)(.+?)(?<=\S)(\*{2,})"""
+    private const val BOLD_UNDER = """(_{2,})(?=\S)(.+?)(?<=\S)(_{2,})"""
     private const val STRIKE = """~~(?=\S)(.+?)(?<=\S)~~"""
     private const val HIGHLIGHT = """==(?=\S)(.+?)(?<=\S)=="""
     private const val ITALIC_STAR = """(?<![*\w])\*(?=\S)([^*\n]*?\S)\*(?![*\w])"""
@@ -237,8 +237,9 @@ object LexicalInline {
             when (hit.kind) {
                 "bold", "italic", "strike", "highlight" -> {
                     out.marker(raw, hit.start, hit.innerStart, inner)
+                    val isTripleOrMore = hit.kind == "bold" && (hit.innerStart - hit.start) >= 3 && (hit.innerStart - hit.start) % 2 == 1
                     val next = when (hit.kind) {
-                        "bold" -> style.copy(bold = true)
+                        "bold" -> style.copy(bold = true, italic = if (isTripleOrMore) true else style.italic)
                         "italic" -> style.copy(italic = true)
                         "strike" -> style.copy(strike = true)
                         else -> style.copy(highlight = true)
@@ -387,8 +388,8 @@ object LexicalInline {
         consider(mathRe, "math", 1, 1)
         consider(linkRe, "link", 2, 1, 2)
         consider(timestampRe, "timestamp", 3, 1)
-        consider(boldStarRe, "bold", 4, 1)
-        consider(boldUnderRe, "bold", 4, 1)
+        consider(boldStarRe, "bold", 4, 2)
+        consider(boldUnderRe, "bold", 4, 2)
         consider(strikeRe, "strike", 5, 1)
         consider(highlightRe, "highlight", 6, 1)
         consider(italicStarRe, "italic", 7, 1)

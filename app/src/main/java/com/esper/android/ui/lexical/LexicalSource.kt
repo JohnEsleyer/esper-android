@@ -189,7 +189,8 @@ object LexicalSource {
     private val HEADING_LINE = Regex("""^#{1,6}[ \t]+\S""")
     private val LIST_LINE = Regex("""^([-*+]|\d{1,9}[.)])[ \t]+\S""")
     private val QUOTE_LINE = Regex("""^>""")
-    private val TABLE_LINE = Regex("""^\|.*\|$""")
+    @Suppress("unused")
+    private val TABLE_LINE_STRICT = Regex("""^\|.*\|$""")
     private val RULE_LINE = Regex("""^(-{3,}|\*{3,}|_{3,})$""")
 
     /**
@@ -255,6 +256,15 @@ object LexicalSource {
             }
 
             if (trimmed.isEmpty()) {
+                val prev = out.lastOrNull()?.trim()
+                if (prev != null && isTableLine(prev)) {
+                    var peek = i + 1
+                    while (peek < lines.size && lines[peek].isBlank()) peek++
+                    if (peek < lines.size && isTableLine(lines[peek].trim())) {
+                        i = peek
+                        continue
+                    }
+                }
                 out.add("")
                 i++
                 continue
@@ -405,11 +415,26 @@ object LexicalSource {
 
     private val CODE_CLOSERS = setOf("}", "};", "end", "fi", "done")
 
+    private fun isTableLine(trimmed: String): Boolean {
+        if (trimmed.isEmpty()) return false
+        if (trimmed.startsWith("```") || trimmed.startsWith("~~~") || trimmed.startsWith(">") || trimmed.startsWith("#")) return false
+        return (trimmed.startsWith("|") && trimmed.contains("|")) ||
+            (trimmed.contains("|") && splitCells(trimmed).size >= 2)
+    }
+
+    private fun splitCells(line: String): List<String> {
+        var text = line.trim()
+        if (text.startsWith("|")) text = text.substring(1)
+        if (text.endsWith("|")) text = text.dropLast(1)
+        if (text.isEmpty()) return emptyList()
+        return text.split(Regex("""(?<!\\)\|""")).map { it.replace("\\|", "|").trim() }
+    }
+
     private fun isBlockLine(trimmed: String): Boolean =
         HEADING_LINE.containsMatchIn(trimmed) ||
             LIST_LINE.containsMatchIn(trimmed) ||
             QUOTE_LINE.containsMatchIn(trimmed) ||
-            TABLE_LINE.matches(trimmed) ||
+            isTableLine(trimmed) ||
             RULE_LINE.matches(trimmed) ||
             trimmed.startsWith("$$") ||
             trimmed.startsWith("\\[") ||
@@ -422,7 +447,7 @@ object LexicalSource {
         val p = previous?.trim() ?: return false
         if (p.isEmpty()) return false
         return (LIST_LINE.containsMatchIn(trimmed) && LIST_LINE.containsMatchIn(p)) ||
-            (TABLE_LINE.matches(trimmed) && TABLE_LINE.matches(p)) ||
+            (isTableLine(trimmed) && isTableLine(p)) ||
             (QUOTE_LINE.containsMatchIn(trimmed) && QUOTE_LINE.containsMatchIn(p))
     }
 
