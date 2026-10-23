@@ -180,7 +180,7 @@ object LexicalParser {
                 }
                 i = delimiterIdx + 1
                 val rows = mutableListOf<List<String>>()
-                var lastRowIndex = delimiterIdx
+                var lastRowIndex: Int = delimiterIdx
                 while (i < lines.size) {
                     val candidate = lines[i].trim()
                     if (candidate.isBlank()) {

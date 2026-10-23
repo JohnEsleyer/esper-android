@@ -4,7 +4,7 @@
 > Android client needs to know about the web + backend repo. If you change
 > main-repo code that alters anything described here, update this file in the
 > same change (see `docs/contributing.md`).
-> Last verified: 2026-10-22. Covers post-encryption-removal state + SVG cover contract + per-user journal id + code block parity + in-block language picker.
+> Last verified: 2026-10-23. Covers post-encryption-removal state + SVG cover contract + per-user journal id + code block parity + in-block language picker + Turnstile gating.
 
 ## Identity
 - Repo `022-esper`: React 19 SPA (`src/`, Cloudflare Pages) + Rust Axum API (`server/`, VPS via Skiff) + SurrealDB v3.x (`surrealkv`). API origin `https://esper-api.johnesleyer.com`, local `http://127.0.0.1:8080`.
@@ -23,6 +23,7 @@
 ## Backend API (`server/src/main.rs`, Firebase RS256 JWKS, 30s drift leeway)
 - `GET /api/health`; `GET /api/user/notes` (owner, authed); `GET /api/notes/:id` (public open; restricted owner-only else 403; protected needs owner or `x-guest-token: guest-token-<id>` else `401 {isProtected:true}`);
 - `PUT /api/notes/:id` / `POST /api/notes` (full upsert, children replaced wholesale); `DELETE /api/notes/:id` (cascades); `POST/PATCH/DELETE /api/notes/:id/pages[/:pageId]` (granular; page DELETE cascades subpages+comments+canvas refs, returns `deletedPageIds`); shelves CRUD; `GET/POST /api/comments/:docId` (ETag-cached GET); `POST /api/upload` (≤25MB → ImageKit `/esper/covers`); `POST /api/me` + `GET /api/me` (profile, member_type, usage/limits).
+- **Turnstile (2026-10-23):** `POST /api/notes/:id/verify-password` requires `password` **and** `cf-turnstile-response` (Siteverify action `unlock`); `POST /api/comments/:docId` requires action `comment`. Hostnames come from `TURNSTILE_HOSTNAMES` (prod: `esper.johnesleyer.com`); failures return `403 {"error":"forbidden"}` and the check is fail-closed. Web sends tokens (`src/services/turnstile.js`, `PasswordPromptModal.jsx`, comment widget in `WorkspaceView.jsx`); Android does not yet — see `esper-android/docs/turnstile-unlock.md`. Rotation: `022-esper/docs/turnstile-credentials.md`.
 - JSON is camelCase (`coverPreset`, `isPinned`, `owner_sub`, `member_type`, `guestToken`). Missing tables surface as empty lists, never 500.
 - SSE `GET /api/events`: `page_updated|page_created|page_deleted|note_updated` with docId — web refetches affected notebook unless a save is pending.
 - Quotas server-enforced (visitor 50 books/100 ch/book/2MB visuals; member 150/360/4MB; admin unlimited); 6h Tokio task prunes inactive non-admin accounts (visitor 30d, member 365d).
