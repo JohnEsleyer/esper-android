@@ -60,6 +60,7 @@ fun WorkspaceScreen(
     questions: List<QuestionEntity>,
     activePageIndex: Int,
     onOpenTabsScreen: () -> Unit,
+    onOpenJournal: () -> Unit = {},
     onOpenConfigureBook: () -> Unit = {},
     onNavigateBack: () -> Unit,
     onSelectPage: (Int) -> Unit,
@@ -89,7 +90,10 @@ fun WorkspaceScreen(
     var showHtmlCodeEditor by remember { mutableStateOf(false) }
     var showDeleteCanvasConfirm by remember { mutableStateOf(false) }
 
-    val activePage = pages.getOrNull(activePageIndex)
+    val sortedPages = remember(pages) {
+        pages.sortedWith(compareBy({ it.position }, { it.id }))
+    }
+    val activePage = sortedPages.getOrNull(activePageIndex)
     val youtubeHostState = remember { YouTubePlayerHostState() }
 
     val attachedCanvas = remember(canvases, activePage?.id) {
@@ -131,7 +135,7 @@ fun WorkspaceScreen(
         gesturesEnabled = true,
         drawerContent = {
             ChapterDrawerContent(
-                pages = pages,
+                pages = sortedPages,
                 canvases = canvases,
                 activePageIndex = activePageIndex,
                 onSelectPage = { idx ->
@@ -183,9 +187,6 @@ fun WorkspaceScreen(
                         IconButton(onClick = { isCommentsSheetOpen = true }) {
                             Icon(Icons.Default.ChatBubbleOutline, contentDescription = "Discussion", tint = IndigoGlow)
                         }
-                        IconButton(onClick = onOpenTabsScreen) {
-                            Icon(Icons.Default.Layers, contentDescription = "Tabs Screen", tint = ElectricViolet)
-                        }
                         if (!isReadOnly) {
                             IconButton(onClick = onOpenConfigureBook) {
                                 Icon(Icons.Default.Tune, contentDescription = "Configure Book", tint = IndigoGlow)
@@ -210,6 +211,93 @@ fun WorkspaceScreen(
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
                     )
+                }
+            },
+            bottomBar = {
+                Surface(
+                    color = CosmicSlate,
+                    border = BorderStroke(1.dp, BorderSlate),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        NavigationBar(
+                            containerColor = CosmicSlate,
+                            tonalElevation = 0.dp,
+                            modifier = Modifier.height(58.dp)
+                        ) {
+                            // LEFT — Journal
+                            NavigationBarItem(
+                                selected = false,
+                                onClick = onOpenJournal,
+                                icon = {
+                                    Icon(
+                                        Icons.Default.EditNote,
+                                        contentDescription = "Journal",
+                                        tint = IndigoGlow,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        "Journal",
+                                        color = IndigoGlow,
+                                        fontSize = 10.sp
+                                    )
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    indicatorColor = IndigoGlow.copy(alpha = 0.15f)
+                                )
+                            )
+                            // CENTER — Chapters sidebar
+                            NavigationBarItem(
+                                selected = false,
+                                onClick = { coroutineScope.launch { leftChaptersDrawerState.open() } },
+                                icon = {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.MenuBook,
+                                        contentDescription = "Chapters",
+                                        tint = IndigoAccent,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        "Chapters",
+                                        color = IndigoAccent,
+                                        fontSize = 10.sp
+                                    )
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    indicatorColor = IndigoAccent.copy(alpha = 0.15f)
+                                )
+                            )
+                            // RIGHT — Tabs
+                            NavigationBarItem(
+                                selected = false,
+                                onClick = onOpenTabsScreen,
+                                icon = {
+                                    Icon(
+                                        Icons.Default.Layers,
+                                        contentDescription = "Tabs",
+                                        tint = ElectricViolet,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        "Tabs",
+                                        color = ElectricViolet,
+                                        fontSize = 10.sp
+                                    )
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    indicatorColor = ElectricViolet.copy(alpha = 0.15f)
+                                )
+                            )
+                        }
+                    }
                 }
             }
         ) { innerPadding ->
