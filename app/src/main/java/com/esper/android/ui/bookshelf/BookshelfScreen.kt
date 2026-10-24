@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -48,6 +49,13 @@ import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.ceil
+
+enum class BookSortOption(val label: String) {
+    RECENTLY_UPDATED("Recently Updated"),
+    OLDEST_UPDATED("Oldest Updated"),
+    TITLE_AZ("Title (A-Z)"),
+    TITLE_ZA("Title (Z-A)")
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -79,12 +87,25 @@ fun BookshelfScreen(
     var isRefreshing by remember { mutableStateOf(false) }
     var bookToDelete by remember { mutableStateOf<NotebookEntity?>(null) }
     var shelfToDelete by remember { mutableStateOf<ShelfEntity?>(null) }
+    var currentSort by remember { mutableStateOf(BookSortOption.RECENTLY_UPDATED) }
+    var sortDropdownExpanded by remember { mutableStateOf(false) }
 
-    // Books are strictly ordered latest to oldest; journal records (legacy
-    // "esper-journal" and per-user "esper-journal-<uid>") are standalone
-    // workspaces and never clutter the bookshelf grid.
-    val sortedNotebooks = remember(notebooks) {
-        notebooks.filter { !it.id.startsWith("esper-journal") }.sortedByDescending { it.updatedAt }
+    val sortedNotebooks = remember(notebooks, currentSort) {
+        val nonJournal = notebooks.filter { !it.id.startsWith("esper-journal") }
+        when (currentSort) {
+            BookSortOption.RECENTLY_UPDATED -> nonJournal.sortedWith(
+                compareByDescending<NotebookEntity> { it.isPinned }.thenByDescending { it.updatedAt }
+            )
+            BookSortOption.OLDEST_UPDATED -> nonJournal.sortedWith(
+                compareByDescending<NotebookEntity> { it.isPinned }.thenBy { it.updatedAt }
+            )
+            BookSortOption.TITLE_AZ -> nonJournal.sortedWith(
+                compareByDescending<NotebookEntity> { it.isPinned }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+            )
+            BookSortOption.TITLE_ZA -> nonJournal.sortedWith(
+                compareByDescending<NotebookEntity> { it.isPinned }.thenByDescending(String.CASE_INSENSITIVE_ORDER) { it.title }
+            )
+        }
     }
 
     val currentShelf = remember(shelves, selectedShelfId) {
@@ -502,19 +523,74 @@ fun BookshelfScreen(
                                     modifier = Modifier.padding(start = 18.dp)
                                 )
                             }
-                            if (selectedShelfId != null || selectedTagFilter != "All" || searchQuery.isNotEmpty()) {
-                                TextButton(
-                                    onClick = {
-                                        // Clears every filter at once so the
-                                        // button always means "show me the
-                                        // whole library".
-                                        selectedShelfId = null
-                                        onSelectTagFilter("All")
-                                        searchQuery = ""
-                                    },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                ) {
-                                    Text("Clear filter", color = IndigoGlow, fontSize = 11.sp)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (selectedShelfId != null || selectedTagFilter != "All" || searchQuery.isNotEmpty()) {
+                                    TextButton(
+                                        onClick = {
+                                            // Clears every filter at once so the
+                                            // button always means "show me the
+                                            // whole library".
+                                            selectedShelfId = null
+                                            onSelectTagFilter("All")
+                                            searchQuery = ""
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text("Clear filter", color = IndigoGlow, fontSize = 11.sp)
+                                    }
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                }
+
+                                // Sort Dropdown Component
+                                Box {
+                                    Surface(
+                                        onClick = { sortDropdownExpanded = true },
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = SurfaceSlate,
+                                        border = BorderStroke(1.dp, BorderSlate)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort", tint = IndigoGlow, modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(currentSort.label, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+
+                                    DropdownMenu(
+                                        expanded = sortDropdownExpanded,
+                                        onDismissRequest = { sortDropdownExpanded = false },
+                                        modifier = Modifier.background(CosmicSlate)
+                                    ) {
+                                        BookSortOption.values().forEach { option ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        if (currentSort == option) {
+                                                            Icon(Icons.Default.Check, contentDescription = null, tint = IndigoGlow, modifier = Modifier.size(14.dp))
+                                                            Spacer(modifier = Modifier.width(8.dp))
+                                                        } else {
+                                                            Spacer(modifier = Modifier.width(22.dp))
+                                                        }
+                                                        Text(
+                                                            text = option.label,
+                                                            color = if (currentSort == option) IndigoGlow else TextPrimary,
+                                                            fontWeight = if (currentSort == option) FontWeight.Bold else FontWeight.Normal,
+                                                            fontSize = 13.sp
+                                                        )
+                                                    }
+                                                },
+                                                onClick = {
+                                                    currentSort = option
+                                                    sortDropdownExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }

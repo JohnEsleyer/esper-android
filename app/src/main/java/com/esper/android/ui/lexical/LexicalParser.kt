@@ -52,7 +52,7 @@ object LexicalParser {
                 // lines are authored vertical space and are kept.
                 if (blocks.isNotEmpty() && run > 1) {
                     blocks += LexicalBlankLineNode(
-                        key = key("blank", i - run),
+                        key = "block_${blocks.size}",
                         count = (run - 1).coerceAtMost(3),
                         lineStart = i - run,
                         lineEnd = i - 1
@@ -81,7 +81,7 @@ object LexicalParser {
                 }
                 val end = i.coerceAtMost(lines.size - 1)
                 blocks += LexicalCodeBlockNode(
-                    key = key("code", start),
+                    key = "block_${blocks.size}",
                     code = body.joinToString("\n"),
                     language = language,
                     lineStart = start,
@@ -115,7 +115,7 @@ object LexicalParser {
                 }
                 val end = i.coerceAtMost(lines.size - 1)
                 blocks += LexicalMathBlockNode(
-                    key = key("math", start),
+                    key = "block_${blocks.size}",
                     latex = body.joinToString("\n").trim('\n'),
                     lineStart = start,
                     lineEnd = end
@@ -128,7 +128,7 @@ object LexicalParser {
             // ------------------------------------------------------ horizontal rule
             if (isHorizontalRule(trimmed)) {
                 blocks += LexicalHorizontalRuleNode(
-                    key = key("hr", i), lineStart = i, lineEnd = i
+                    key = "block_${blocks.size}", lineStart = i, lineEnd = i
                 )
                 i++
                 listStack.clear()
@@ -139,7 +139,7 @@ object LexicalParser {
             val image = imageBlockRegex.matchEntire(trimmed)
             if (image != null) {
                 blocks += LexicalImageNode(
-                    key = key("img", i),
+                    key = "block_${blocks.size}",
                     altText = image.groupValues[1],
                     imageUrl = image.groupValues[2],
                     lineStart = i,
@@ -154,7 +154,7 @@ object LexicalParser {
             val heading = headingRegex.matchEntire(trimmed)
             if (heading != null) {
                 blocks += LexicalHeadingNode(
-                    key = key("h", i),
+                    key = "block_${blocks.size}",
                     level = heading.groupValues[1].length,
                     inlines = inlinesOf(listOf(heading.groupValues[2])),
                     lineStart = i,
@@ -203,7 +203,7 @@ object LexicalParser {
                     i++
                 }
                 blocks += LexicalTableNode(
-                    key = key("table", start),
+                    key = "block_${blocks.size}",
                     headers = headers,
                     rows = rows,
                     alignments = alignments,
@@ -236,7 +236,7 @@ object LexicalParser {
                     }
                 }
                 blocks += LexicalQuoteNode(
-                    key = key("quote", start),
+                    key = "block_${blocks.size}",
                     inlines = inlinesOf(content),
                     lineStart = start,
                     lineEnd = i - 1
@@ -282,7 +282,7 @@ object LexicalParser {
                 val level = (listStack.size - 1).coerceAtLeast(0)
 
                 blocks += LexicalListItemNode(
-                    key = key("li", start),
+                    key = "block_${blocks.size}",
                     isOrdered = marker.ordered,
                     indexNumber = marker.number,
                     indentLevel = level,
@@ -316,7 +316,7 @@ object LexicalParser {
                 i++
             }
             blocks += LexicalParagraphNode(
-                key = key("p", start),
+                key = "block_${blocks.size}",
                 inlines = inlinesOf(content),
                 lineStart = start,
                 lineEnd = i - 1
@@ -484,8 +484,6 @@ object LexicalParser {
     }
 
     // -------------------------------------------------------------- utilities
-
-    private fun key(type: String, line: Int): String = "$type@$line"
 
     private fun leadingWidth(line: String): Int {
         var width = 0

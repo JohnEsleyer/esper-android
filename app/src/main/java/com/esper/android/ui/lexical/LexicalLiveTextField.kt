@@ -24,7 +24,11 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,14 +66,13 @@ import com.esper.android.ui.theme.TextSecondary
  * Makes a plain text field behave like a rendered editor:
  *
  *  * markdown markers (`**`, `*`, `` ` ``, `~~`, `$`, `[ ](…)`, `:shortcode:`)
- *    are hidden and replaced by the formatting they describe;
- *  * the markers of the construct the caret sits in are revealed and dimmed so
- *    the document is still editable;
- *  * the mapping between stored offsets and displayed offsets is exact, so
- *    tapping and cursor movement land where the user expects.
+ *    are styled with subtle dimmed syntax coloring;
+ *  * content formatting (bold, italic, code, links) is applied directly;
+ *  * 1:1 OffsetMapping.Identity ensures Android IME composing regions and
+ *    caret tracking remain synchronized without jumping or jitter.
  */
 class InlineMarkdownTransformation(
-    private val caret: Int,
+    private val caret: Int = 0,
     private val base: SpanStyle,
     private val colors: LexicalInlineColors
 ) : VisualTransformation {
@@ -77,70 +80,21 @@ class InlineMarkdownTransformation(
     override fun filter(text: AnnotatedString): TransformedText {
         val raw = text.text
         val scan = LexicalInline.scan(raw)
-        val builder = AnnotatedString.Builder()
-        val rawToDisplay = IntArray(raw.length + 1)
-        var display = 0
-        var rawCursor = 0
+        val builder = AnnotatedString.Builder(raw)
 
         scan.spans.forEach { span ->
-            // Defensive: if the token stream ever leaves a gap, keep it literal.
-            while (rawCursor < span.rawStart) {
-                rawToDisplay[rawCursor] = display
-                builder.append(raw[rawCursor])
-                display++
-                rawCursor++
+            val start = span.rawStart.coerceIn(0, raw.length)
+            val end = span.rawEnd.coerceIn(start, raw.length)
+            if (start < end) {
+                builder.addStyle(styleFor(span), start, end)
             }
-
-            val hidden = span.kind == LexicalInlineKind.MARKER && !isRevealed(span)
-            val tokenLength = span.text.length
-            val rawLength = (span.rawEnd - span.rawStart).coerceAtLeast(0)
-
-            if (!hidden) {
-                val style = styleFor(span)
-                builder.withStyle(style) { append(span.text) }
-                for (offset in 0 until rawLength) {
-                    rawToDisplay[span.rawStart + offset] =
-                        if (rawLength == tokenLength) display + offset
-                        else display + (offset * tokenLength / rawLength)
-                }
-                display += tokenLength
-            } else {
-                for (offset in 0 until rawLength) {
-                    rawToDisplay[span.rawStart + offset] = display
-                }
-            }
-            rawCursor = span.rawEnd
-        }
-
-        while (rawCursor < raw.length) {
-            rawToDisplay[rawCursor] = display
-            builder.append(raw[rawCursor])
-            display++
-            rawCursor++
-        }
-        rawToDisplay[raw.length] = display
-
-        // Reverse map: whichever raw offset last lands on a display offset wins,
-        // which puts the caret just *after* a hidden marker.
-        val displayToRaw = IntArray(display + 1)
-        for (offset in 0..raw.length) {
-            displayToRaw[rawToDisplay[offset].coerceIn(0, display)] = offset
         }
 
         return TransformedText(
             builder.toAnnotatedString(),
-            object : OffsetMapping {
-                override fun originalToTransformed(offset: Int): Int =
-                    rawToDisplay[offset.coerceIn(0, raw.length)]
-
-                override fun transformedToOriginal(offset: Int): Int =
-                    displayToRaw[offset.coerceIn(0, display)]
-            }
+            OffsetMapping.Identity
         )
     }
-
-    private fun isRevealed(span: LexicalInlineSpan): Boolean =
-        caret >= span.constructStart && caret < span.constructEnd
 
     private fun styleFor(span: LexicalInlineSpan): SpanStyle = when (span.kind) {
         LexicalInlineKind.MARKER -> SpanStyle(
@@ -260,6 +214,7 @@ fun LiveTextField(
     suggestions: EmojiSuggestionHost? = null,
     initialCaret: Int? = null,
     onFocusLost: () -> Unit = {},
+    onFocusStateChanged: (Boolean) -> Unit = {},
     onPasteMarkdown: ((pasted: String, selection: TextRange, blockText: String) -> Unit)? = null
 ) {
     var value by remember(block.key) {
@@ -268,12 +223,23 @@ fun LiveTextField(
     }
     var isFocused by remember(block.key) { mutableStateOf(false) }
     var wasFocused by remember(block.key) { mutableStateOf(false) }
+    var blurJob by remember(block.key) { mutableStateOf<Job?>(null) }
+    val coroutineScope = rememberCoroutineScope()
     // Set once a paste has been handed to the editor: the field is about to be
     // removed, and any further IME callback would commit stale text over the
     // document that was just built from the paste.
     var pasteHandled by remember(block.key) { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+
+    DisposableEffect(block.key) {
+        onDispose {
+            blurJob?.cancel()
+            if (isFocused || wasFocused) {
+                onFocusStateChanged(false)
+            }
+        }
+    }
 
     // Follow external edits (sync, undo, toolbar) only when the user is not
     // typing in this field.
@@ -408,10 +374,18 @@ fun LiveTextField(
                 .onFocusChanged { state ->
                     isFocused = state.isFocused
                     if (state.isFocused) {
+                        blurJob?.cancel()
+                        blurJob = null
                         wasFocused = true
+                        onFocusStateChanged(true)
                     } else if (wasFocused) {
-                        wasFocused = false
-                        onFocusLost()
+                        blurJob?.cancel()
+                        blurJob = coroutineScope.launch {
+                            delay(200)
+                            wasFocused = false
+                            onFocusStateChanged(false)
+                            onFocusLost()
+                        }
                     }
                 },
             decorationBox = { innerTextField ->

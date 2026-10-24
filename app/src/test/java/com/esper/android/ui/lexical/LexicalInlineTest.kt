@@ -3,6 +3,8 @@ package com.esper.android.ui.lexical
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.unit.sp
 import org.junit.Assert.assertEquals
@@ -73,67 +75,74 @@ class LexicalInlineTest {
     // --------------------------------------------------------- transformation
 
     @Test
-    fun `markers are hidden when the caret is outside the construct`() {
-        val out = transform("**bold**", caret = 8)
-        assertEquals("bold", out.text.text)
-    }
-
-    @Test
-    fun `markers are revealed while the caret is inside the construct`() {
+    fun `markers are preserved 1 to 1 and styled with dimmed syntax color`() {
         val out = transform("**bold**", caret = 4)
         assertEquals("**bold**", out.text.text)
+        assertEquals(OffsetMapping.Identity, out.offsetMapping)
+
+        // Opening marker (0..2) and closing marker (6..8) are styled with dimmed color
+        assertTrue(out.text.spanStyles.any { it.start == 0 && it.end == 2 && it.item.color == colors.muted.copy(alpha = 0.65f) })
+        assertTrue(out.text.spanStyles.any { it.start == 6 && it.end == 8 && it.item.color == colors.muted.copy(alpha = 0.65f) })
+        // Content (2..6) is styled with bold
+        assertTrue(out.text.spanStyles.any { it.start == 2 && it.end == 6 && it.item.fontWeight == FontWeight.Bold })
     }
 
     @Test
-    fun `links show only their label`() {
-        val out = transform("see [the docs](https://example.com:8080/x) now", caret = 0)
-        assertEquals("see the docs now", out.text.text)
+    fun `links keep full markdown syntax with 1 to 1 mapping`() {
+        val raw = "see [the docs](https://example.com:8080/x) now"
+        val out = transform(raw, caret = 0)
+        assertEquals(raw, out.text.text)
+        assertEquals(OffsetMapping.Identity, out.offsetMapping)
     }
 
     @Test
-    fun `inline code hides its backticks`() {
-        val out = transform("run `pnpm dev` first", caret = 19)
-        assertEquals("run pnpm dev first", out.text.text)
+    fun `inline code keeps backticks with code styling and 1 to 1 mapping`() {
+        val raw = "run `pnpm dev` first"
+        val out = transform(raw, caret = 19)
+        assertEquals(raw, out.text.text)
+        assertEquals(OffsetMapping.Identity, out.offsetMapping)
+        assertTrue(out.text.spanStyles.any { it.start == 4 && it.end == 5 && it.item.color == colors.muted.copy(alpha = 0.65f) })
+        assertTrue(out.text.spanStyles.any { it.start == 5 && it.end == 13 && it.item.color == colors.code })
+        assertTrue(out.text.spanStyles.any { it.start == 13 && it.end == 14 && it.item.color == colors.muted.copy(alpha = 0.65f) })
     }
 
     @Test
-    fun `emoji shortcodes render as the glyph`() {
-        val out = transform(":tada: ", caret = 7)
-        assertEquals(LexicalInline.EMOJI.getValue("tada") + " ", out.text.text)
+    fun `emoji shortcodes retain literal text in active field`() {
+        val raw = ":tada: "
+        val out = transform(raw, caret = 7)
+        assertEquals(raw, out.text.text)
+        assertEquals(OffsetMapping.Identity, out.offsetMapping)
     }
 
     @Test
     fun `plain text is unchanged`() {
         val text = "just words"
-        assertEquals(text, transform(text, caret = 0).text.text)
+        val out = transform(text, caret = 0)
+        assertEquals(text, out.text.text)
+        assertEquals(OffsetMapping.Identity, out.offsetMapping)
     }
 
     // --------------------------------------------------------- offset mapping
 
     @Test
-    fun `display offsets map past the opening marker`() {
-        // "**bold**": the visible "bold" starts at raw offset 2.
+    fun `display offsets map past the opening marker in rendered view`() {
+        // "**bold**": in rendered view, the visible "bold" starts at raw offset 2.
         assertEquals(2, LexicalInline.displayOffsetToRaw("**bold**", 0))
         assertEquals(4, LexicalInline.displayOffsetToRaw("**bold**", 2))
         assertEquals(6, LexicalInline.displayOffsetToRaw("**bold**", 4))
     }
 
     @Test
-    fun `raw offsets map onto the displayed text`() {
-        val mapping = transform("**bold**", caret = 8).offsetMapping
+    fun `offset mapping is 1 to 1 identity across formatted text`() {
+        val out = transform("**bold** and `code` and [link](url)")
+        val mapping = out.offsetMapping
+        val textLength = out.text.text.length
 
-        assertEquals(0, mapping.originalToTransformed(0))
-        assertEquals(0, mapping.originalToTransformed(2))
-        assertEquals(2, mapping.originalToTransformed(4))
-        assertEquals(4, mapping.originalToTransformed(8))
-    }
-
-    @Test
-    fun `tapping the start of bold text puts the caret after the marker`() {
-        val mapping = transform("**bold**", caret = 8).offsetMapping
-
-        assertEquals(2, mapping.transformedToOriginal(0))
-        assertEquals(8, mapping.transformedToOriginal(4))
+        assertEquals(OffsetMapping.Identity, mapping)
+        for (offset in 0..textLength) {
+            assertEquals(offset, mapping.originalToTransformed(offset))
+            assertEquals(offset, mapping.transformedToOriginal(offset))
+        }
     }
 
     @Test

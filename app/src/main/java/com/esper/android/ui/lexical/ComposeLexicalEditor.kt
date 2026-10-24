@@ -275,7 +275,7 @@ fun ComposeLexicalEditor(
         textState.value = newText
         debounceJob?.cancel()
         debounceJob = coroutineScope.launch {
-            delay(300)
+            delay(600)
             currentOnContentChanged(newText)
         }
     }
@@ -290,7 +290,7 @@ fun ComposeLexicalEditor(
         debounceJob?.cancel()
         textState.value = text
         debounceJob = coroutineScope.launch {
-            delay(300)
+            delay(600)
             currentOnContentChanged(text)
         }
     }
@@ -438,16 +438,16 @@ fun ComposeLexicalEditor(
     // Drain the buffered remote/Room text (if any still differs) when the
     // user idles away from the field. Skip while a debounce is still saving
     // so a stale snapshot never replays over fresher local text.
-    LaunchedEffect(isFieldFocused, editingKey) {
-        if (isFieldFocused || editingKey != null) return@LaunchedEffect
+    LaunchedEffect(isFieldFocused, editingKey, debounceJob?.isActive) {
+        if (isFieldFocused || editingKey != null || debounceJob?.isActive == true) return@LaunchedEffect
         val buffered = pendingExternalText
-        pendingExternalText = null
-        if (buffered != null && debounceJob?.isActive != true && buffered != textState.value) {
+        if (buffered != null && buffered != textState.value) {
+            pendingExternalText = null
             renderExternal(buffered)
         }
     }
 
-    // Flush pending changes on dispose so a 300ms window never drops the tail
+    // Flush pending changes on dispose so a 600ms window never drops the tail
     // of an edit when the user leaves the screen.
     DisposableEffect(Unit) {
         onDispose {
@@ -593,6 +593,7 @@ fun ComposeLexicalEditor(
                                         editingCaret = null
                                     }
                                 },
+                                onFocusStateChanged = { isFieldFocused = it },
                                 onFocusConsumed = {
                                     if (focusLine == block.lineStart) focusLine = null
                                 },
@@ -706,6 +707,7 @@ private fun LiveBlock(
     onPasteMarkdown: (String, LexicalBlockNode, TextRange, String) -> Unit,
     onRequestEdit: (LexicalBlockNode, Int) -> Unit,
     onFocusLost: () -> Unit,
+    onFocusStateChanged: (Boolean) -> Unit = {},
     onFocusConsumed: () -> Unit,
     onTimestampClicked: (Int) -> Unit,
     onToggleTask: (Boolean) -> Unit,
@@ -767,6 +769,7 @@ private fun LiveBlock(
                     placeholder = null,
                     onRequestEdit = onRequestEdit,
                     onFocusLost = onFocusLost,
+                    onFocusStateChanged = onFocusStateChanged,
                     onTimestampClicked = onTimestampClicked,
                     suggestions = suggestionsHost,
                     onPasteMarkdown = onPasteMarkdown,
@@ -793,6 +796,7 @@ private fun LiveBlock(
             colors = colors,
             onRequestEdit = onRequestEdit,
             onFocusLost = onFocusLost,
+            onFocusStateChanged = onFocusStateChanged,
             onTextCommitted = onTextCommitted
         )
 
@@ -860,6 +864,7 @@ private fun LiveBlock(
                 placeholder = null,
                 onRequestEdit = onRequestEdit,
                 onFocusLost = onFocusLost,
+                onFocusStateChanged = onFocusStateChanged,
                 onTimestampClicked = onTimestampClicked,
                 suggestions = suggestionsHost,
                 onPasteMarkdown = onPasteMarkdown,
@@ -877,6 +882,7 @@ private fun LiveBlock(
             colors = colors,
             onRequestEdit = onRequestEdit,
             onFocusLost = onFocusLost,
+            onFocusStateChanged = onFocusStateChanged,
             onTextCommitted = onTextCommitted,
             onDeleteBlock = onDeleteBlock,
             onChangeCodeLanguage = onChangeCodeLanguage
@@ -948,6 +954,7 @@ private fun LiveBlock(
                     placeholder = null,
                     onRequestEdit = onRequestEdit,
                     onFocusLost = onFocusLost,
+                    onFocusStateChanged = onFocusStateChanged,
                     onTimestampClicked = onTimestampClicked,
                     suggestions = suggestionsHost,
                     onPasteMarkdown = onPasteMarkdown,
@@ -977,6 +984,7 @@ private fun LiveBlock(
             placeholder = if (block.plainText.isEmpty()) "Start writing\u2026" else null,
             onRequestEdit = onRequestEdit,
             onFocusLost = onFocusLost,
+            onFocusStateChanged = onFocusStateChanged,
             onTimestampClicked = onTimestampClicked,
             suggestions = suggestionsHost,
             onPasteMarkdown = onPasteMarkdown,
@@ -1005,6 +1013,7 @@ private fun EditableBlockText(
     placeholder: String?,
     onRequestEdit: (LexicalBlockNode, Int) -> Unit,
     onFocusLost: () -> Unit,
+    onFocusStateChanged: (Boolean) -> Unit = {},
     onTimestampClicked: (Int) -> Unit,
     onTextCommitted: (String) -> Unit,
     onSplit: (String, Int) -> Unit,
@@ -1027,6 +1036,7 @@ private fun EditableBlockText(
             initialCaret = editingCaret,
             placeholder = placeholder,
             onFocusLost = onFocusLost,
+            onFocusStateChanged = onFocusStateChanged,
             suggestions = suggestions,
             onPasteMarkdown = { pasted, selection, text ->
                 onPasteMarkdown(pasted, block, selection, text)
@@ -1093,6 +1103,7 @@ private fun LexicalCodeBlock(
     colors: LexicalInlineColors,
     onRequestEdit: (LexicalBlockNode, Int) -> Unit,
     onFocusLost: () -> Unit,
+    onFocusStateChanged: (Boolean) -> Unit = {},
     onTextCommitted: (String) -> Unit,
     onDeleteBlock: () -> Unit,
     onChangeCodeLanguage: (String) -> Unit
@@ -1215,6 +1226,7 @@ private fun LexicalCodeBlock(
                     codeLanguage = block.language,
                     showEmojiPicker = false,
                     onFocusLost = onFocusLost,
+                    onFocusStateChanged = onFocusStateChanged,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                 )
             } else {
@@ -1271,6 +1283,7 @@ private fun MathBlock(
     colors: LexicalInlineColors,
     onRequestEdit: (LexicalBlockNode, Int) -> Unit,
     onFocusLost: () -> Unit,
+    onFocusStateChanged: (Boolean) -> Unit = {},
     onTextCommitted: (String) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -1299,6 +1312,7 @@ private fun MathBlock(
                 useMarkdown = false,
                 showEmojiPicker = false,
                 onFocusLost = onFocusLost,
+                onFocusStateChanged = onFocusStateChanged,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))

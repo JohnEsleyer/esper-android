@@ -106,6 +106,15 @@ class SyncManager(
                 updatedAt = System.currentTimeMillis()
             )
         )
+        // Purge local pages for this notebook that no longer exist on the server
+        val remotePageIds = r.pages?.map { it.id }?.toSet() ?: emptySet()
+        val localPages = db.dao().getPagesForNotebook(r.id)
+        localPages.forEach { localPage ->
+            if (!remotePageIds.contains(localPage.id)) {
+                db.dao().deletePageAndChildren(r.id, localPage.id)
+            }
+        }
+
         r.pages?.mapIndexed { idx, p ->
             PageEntity(
                 id = p.id,
