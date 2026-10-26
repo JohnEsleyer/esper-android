@@ -51,7 +51,7 @@ enum class ViewportMode {
     EDITOR_FULL
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun WorkspaceScreen(
     notebookTitle: String,
@@ -130,6 +130,11 @@ fun WorkspaceScreen(
             onNavigateBack()
         }
     }
+
+    // While the keyboard is open the bottom bar would sit right above it,
+    // eating editor space (and its nav-bar padding shows as a dead strip).
+    // Hide the whole bar so the document gets the room instead.
+    val isImeVisible = WindowInsets.isImeVisible
 
     ModalNavigationDrawer(
         drawerState = leftChaptersDrawerState,
@@ -215,92 +220,94 @@ fun WorkspaceScreen(
                 }
             },
             bottomBar = {
-                Surface(
-                    color = CosmicSlate,
-                    border = BorderStroke(1.dp, BorderSlate),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        NavigationBar(
-                            containerColor = CosmicSlate,
-                            tonalElevation = 0.dp,
-                            modifier = Modifier.height(58.dp)
-                        ) {
-                            // LEFT — Journal
-                            NavigationBarItem(
-                                selected = false,
-                                onClick = onOpenJournal,
-                                icon = {
-                                    Icon(
-                                        Icons.Default.EditNote,
-                                        contentDescription = "Journal",
-                                        tint = IndigoGlow,
-                                        modifier = Modifier.size(22.dp)
+                if (!isImeVisible) {
+                    Surface(
+                        color = CosmicSlate,
+                        border = BorderStroke(1.dp, BorderSlate),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            NavigationBar(
+                                containerColor = CosmicSlate,
+                                tonalElevation = 0.dp,
+                                modifier = Modifier.height(58.dp)
+                            ) {
+                                // LEFT — Journal
+                                NavigationBarItem(
+                                    selected = false,
+                                    onClick = onOpenJournal,
+                                    icon = {
+                                        Icon(
+                                            Icons.Default.EditNote,
+                                            contentDescription = "Journal",
+                                            tint = IndigoGlow,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    },
+                                    label = {
+                                        Text(
+                                            "Journal",
+                                            color = IndigoGlow,
+                                            fontSize = 10.sp
+                                        )
+                                    },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        indicatorColor = IndigoGlow.copy(alpha = 0.15f)
                                     )
-                                },
-                                label = {
-                                    Text(
-                                        "Journal",
-                                        color = IndigoGlow,
-                                        fontSize = 10.sp
-                                    )
-                                },
-                                colors = NavigationBarItemDefaults.colors(
-                                    indicatorColor = IndigoGlow.copy(alpha = 0.15f)
                                 )
-                            )
-                            // CENTER — Chapters sidebar
-                            NavigationBarItem(
-                                selected = false,
-                                onClick = { coroutineScope.launch { leftChaptersDrawerState.open() } },
-                                icon = {
-                                    Icon(
-                                        Icons.AutoMirrored.Filled.MenuBook,
-                                        contentDescription = "Chapters",
-                                        tint = IndigoAccent,
-                                        modifier = Modifier.size(22.dp)
+                                // CENTER — Chapters sidebar
+                                NavigationBarItem(
+                                    selected = false,
+                                    onClick = { coroutineScope.launch { leftChaptersDrawerState.open() } },
+                                    icon = {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.MenuBook,
+                                            contentDescription = "Chapters",
+                                            tint = IndigoAccent,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    },
+                                    label = {
+                                        Text(
+                                            "Chapters",
+                                            color = IndigoAccent,
+                                            fontSize = 10.sp
+                                        )
+                                    },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        indicatorColor = IndigoAccent.copy(alpha = 0.15f)
                                     )
-                                },
-                                label = {
-                                    Text(
-                                        "Chapters",
-                                        color = IndigoAccent,
-                                        fontSize = 10.sp
-                                    )
-                                },
-                                colors = NavigationBarItemDefaults.colors(
-                                    indicatorColor = IndigoAccent.copy(alpha = 0.15f)
                                 )
-                            )
-                            // RIGHT — Tabs
-                            NavigationBarItem(
-                                selected = false,
-                                onClick = onOpenTabsScreen,
-                                icon = {
-                                    Icon(
-                                        Icons.Default.Layers,
-                                        contentDescription = "Tabs",
-                                        tint = ElectricViolet,
-                                        modifier = Modifier.size(22.dp)
+                                // RIGHT — Tabs
+                                NavigationBarItem(
+                                    selected = false,
+                                    onClick = onOpenTabsScreen,
+                                    icon = {
+                                        Icon(
+                                            Icons.Default.Layers,
+                                            contentDescription = "Tabs",
+                                            tint = ElectricViolet,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    },
+                                    label = {
+                                        Text(
+                                            "Tabs",
+                                            color = ElectricViolet,
+                                            fontSize = 10.sp
+                                        )
+                                    },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        indicatorColor = ElectricViolet.copy(alpha = 0.15f)
                                     )
-                                },
-                                label = {
-                                    Text(
-                                        "Tabs",
-                                        color = ElectricViolet,
-                                        fontSize = 10.sp
-                                    )
-                                },
-                                colors = NavigationBarItemDefaults.colors(
-                                    indicatorColor = ElectricViolet.copy(alpha = 0.15f)
                                 )
-                            )
+                            }
                         }
                     }
                 }
-            }
+            },
         ) { innerPadding ->
             BoxWithConstraints(
                 modifier = Modifier

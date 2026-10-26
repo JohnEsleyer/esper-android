@@ -25,7 +25,7 @@ import com.esper.android.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.*
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun JournalScreen(
     pages: List<PageEntity>,
@@ -51,6 +51,10 @@ fun JournalScreen(
 
     val activePage = pages.getOrNull(activePageIndex)
     var showDeleteEntryConfirm by remember { mutableStateOf(false) }
+
+    // Hide the page stepper while the keyboard is open: otherwise it sits
+    // directly above the IME and its nav-bar padding covers the editor.
+    val isImeVisible = WindowInsets.isImeVisible
 
     Scaffold(
         topBar = {
@@ -112,7 +116,7 @@ fun JournalScreen(
         },
         // Thumb-reachable page stepper: Previous / counter / Next.
         bottomBar = {
-            if (pages.isNotEmpty()) {
+            if (pages.isNotEmpty() && !isImeVisible) {
                 Surface(
                     color = CosmicSlate,
                     border = BorderStroke(1.dp, BorderSlate),
