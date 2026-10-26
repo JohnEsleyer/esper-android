@@ -52,7 +52,9 @@ import kotlin.math.ceil
 
 enum class BookSortOption(val label: String) {
     RECENTLY_UPDATED("Recently Updated"),
+    RECENTLY_CREATED("Recently Created"),
     OLDEST_UPDATED("Oldest Updated"),
+    OLDEST_CREATED("Oldest Created"),
     TITLE_AZ("Title (A-Z)"),
     TITLE_ZA("Title (Z-A)")
 }
@@ -98,6 +100,12 @@ fun BookshelfScreen(
             )
             BookSortOption.OLDEST_UPDATED -> nonJournal.sortedWith(
                 compareByDescending<NotebookEntity> { it.isPinned }.thenBy { it.updatedAt }
+            )
+            BookSortOption.RECENTLY_CREATED -> nonJournal.sortedWith(
+                compareByDescending<NotebookEntity> { it.isPinned }.thenByDescending { it.createdAt }
+            )
+            BookSortOption.OLDEST_CREATED -> nonJournal.sortedWith(
+                compareByDescending<NotebookEntity> { it.isPinned }.thenBy { it.createdAt }
             )
             BookSortOption.TITLE_AZ -> nonJournal.sortedWith(
                 compareByDescending<NotebookEntity> { it.isPinned }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }

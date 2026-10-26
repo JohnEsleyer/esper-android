@@ -13,6 +13,10 @@ data class NotebookEntity(
     val coverImage: String? = null,
     val isPinned: Boolean = false,
     val tagsCsv: String = "",
+    // Creation timestamp (epoch millis) used by the "Recently Created" sort.
+    // Server rows are backfilled from created_at; legacy local rows from
+    // updatedAt by MIGRATION_4_5.
+    @ColumnInfo(defaultValue = "0") val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
 

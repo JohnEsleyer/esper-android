@@ -10,6 +10,7 @@ class BookSortingTest {
         id: String,
         title: String,
         updatedAt: Long,
+        createdAt: Long = updatedAt,
         isPinned: Boolean = false
     ) = NotebookEntity(
         id = id,
@@ -17,6 +18,7 @@ class BookSortingTest {
         description = "",
         ownerSub = "u1",
         tagsCsv = "",
+        createdAt = createdAt,
         updatedAt = updatedAt,
         isPinned = isPinned
     )
@@ -36,6 +38,12 @@ class BookSortingTest {
             )
             BookSortOption.OLDEST_UPDATED -> nonJournal.sortedWith(
                 compareByDescending<NotebookEntity> { it.isPinned }.thenBy { it.updatedAt }
+            )
+            BookSortOption.RECENTLY_CREATED -> nonJournal.sortedWith(
+                compareByDescending<NotebookEntity> { it.isPinned }.thenByDescending { it.createdAt }
+            )
+            BookSortOption.OLDEST_CREATED -> nonJournal.sortedWith(
+                compareByDescending<NotebookEntity> { it.isPinned }.thenBy { it.createdAt }
             )
             BookSortOption.TITLE_AZ -> nonJournal.sortedWith(
                 compareByDescending<NotebookEntity> { it.isPinned }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
@@ -68,6 +76,23 @@ class BookSortingTest {
     fun `title Z-A sorts pinned first, then by title case-insensitive descending`() {
         val result = sort(allBooks, BookSortOption.TITLE_ZA)
         assertEquals(listOf(pinnedBook, bookC, bookB, bookA), result)
+    }
+
+    @Test
+    fun `recently created sorts pinned first, then by createdAt descending`() {
+        // Recency of creation is independent of last edit time.
+        val newlyCreated = book("b5", title = "New", updatedAt = 100L, createdAt = 9000L)
+        val oldButEdited = book("b6", title = "Old", updatedAt = 9000L, createdAt = 100L)
+        val result = sort(listOf(oldButEdited, newlyCreated, pinnedBook), BookSortOption.RECENTLY_CREATED)
+        assertEquals(listOf(pinnedBook, newlyCreated, oldButEdited), result)
+    }
+
+    @Test
+    fun `oldest created sorts pinned first, then by createdAt ascending`() {
+        val newlyCreated = book("b5", title = "New", updatedAt = 100L, createdAt = 9000L)
+        val oldButEdited = book("b6", title = "Old", updatedAt = 9000L, createdAt = 100L)
+        val result = sort(listOf(newlyCreated, oldButEdited, pinnedBook), BookSortOption.OLDEST_CREATED)
+        assertEquals(listOf(pinnedBook, oldButEdited, newlyCreated), result)
     }
 
     @Test

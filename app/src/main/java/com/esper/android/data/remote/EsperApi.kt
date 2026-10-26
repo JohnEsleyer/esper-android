@@ -78,7 +78,9 @@ data class RemoteNotebook(
     val isPinned: Boolean?,
     val pages: List<RemotePage>?,
     val canvases: List<RemoteCanvas>?,
-    val questions: List<RemoteQuestion>?
+    val questions: List<RemoteQuestion>?,
+    // Epoch seconds on the server; converted to millis when stored locally.
+    val createdAt: Long? = null
 )
 
 data class RemoteTabItem(

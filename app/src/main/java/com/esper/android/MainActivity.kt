@@ -73,6 +73,7 @@ class MainActivity : ComponentActivity() {
 
     private val db by lazy {
         Room.databaseBuilder(applicationContext, EsperDatabase::class.java, "esper.db")
+            .addMigrations(EsperDatabase.MIGRATION_4_5)
             .fallbackToDestructiveMigration()
             .build()
     }
@@ -272,7 +273,9 @@ class MainActivity : ComponentActivity() {
                                     docId = it.notebook.id,
                                     pageId = it.pageId ?: "p1",
                                     pageNumber = it.pageNumber,
-                                    updatedAt = System.currentTimeMillis()
+                                    // Per-tab recency so ordering survives reloads.
+                                    updatedAt = it.lastOpenedAt.takeIf { ts -> ts > 0L }
+                                        ?: System.currentTimeMillis()
                                 )
                             }
                             api.updateUserTabs(mapOf("tabs" to payload))
@@ -419,13 +422,15 @@ class MainActivity : ComponentActivity() {
                     val pages = details?.pages?.sortedWith(compareBy({ it.position }, { it.id })) ?: emptyList()
                     val safeIndex = pageIndex.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
                     val page = pages.getOrNull(safeIndex)
+                    val now = System.currentTimeMillis()
                     activeNotebookId = docId
                     activePageIndex = safeIndex
-                    openTabItems = openTabItems.map { item ->
+                    val updatedTabs = openTabItems.map { item ->
                         if (item.notebook.id == docId) {
                             item.copy(
                                 pageNumber = safeIndex + 1,
-                                pageId = page?.id ?: item.pageId
+                                pageId = page?.id ?: item.pageId,
+                                lastOpenedAt = now
                             )
                         } else item
                     }.let {
@@ -438,12 +443,14 @@ class MainActivity : ComponentActivity() {
                                 it + TabItemData(
                                     notebook = nb,
                                     pageNumber = safeIndex + 1,
-                                    pageId = page?.id
+                                    pageId = page?.id,
+                                    lastOpenedAt = now
                                 )
                             } else it
                         }
                     }
-                    persistTabsToServer(openTabItems)
+                    openTabItems = updatedTabs
+                    persistTabsToServer(updatedTabs)
                     navigateTo(ActiveScreen.WORKSPACE)
                 }
 
@@ -479,7 +486,11 @@ class MainActivity : ComponentActivity() {
                                             TabItemData(
                                                 notebook = nb,
                                                 pageNumber = (st.pageNumber ?: 1).coerceAtLeast(1),
-                                                pageId = st.pageId
+                                                pageId = st.pageId,
+                                                // Server timestamps are epoch seconds.
+                                                lastOpenedAt = st.updatedAt?.let { ts ->
+                                                    if (ts in 1..999_999_999_999L) ts * 1000 else ts
+                                                } ?: 0L
                                             )
                                         }
                                     }
@@ -624,6 +635,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun openBookDirect(id: String) {
+                    val now = System.currentTimeMillis()
                     val existing = openTabItems.find { it.notebook.id == id }
                     if (existing == null) {
                         val nb = notebooks.find { it.id == id }
@@ -631,7 +643,8 @@ class MainActivity : ComponentActivity() {
                             val updated = openTabItems + TabItemData(
                                 notebook = nb,
                                 pageNumber = 1,
-                                pageId = null
+                                pageId = null,
+                                lastOpenedAt = now
                             )
                             openTabItems = updated
                             persistTabsToServer(updated)
@@ -639,6 +652,11 @@ class MainActivity : ComponentActivity() {
                         activeNotebookId = id
                         activePageIndex = 0
                     } else {
+                        val updated = openTabItems.map {
+                            if (it.notebook.id == id) it.copy(lastOpenedAt = now) else it
+                        }
+                        openTabItems = updated
+                        persistTabsToServer(updated)
                         activeNotebookId = id
                         activePageIndex = (existing.pageNumber - 1).coerceAtLeast(0)
                     }
@@ -972,7 +990,8 @@ class MainActivity : ComponentActivity() {
                                             val updated = openTabItems + TabItemData(
                                                 notebook = importedNotebook,
                                                 pageNumber = 1,
-                                                pageId = imported.pages.firstOrNull()?.id
+                                                pageId = imported.pages.firstOrNull()?.id,
+                                                lastOpenedAt = System.currentTimeMillis()
                                             )
                                             openTabItems = updated
                                             persistTabsToServer(updated)
@@ -1081,12 +1100,14 @@ class MainActivity : ComponentActivity() {
                                             position = 0
                                         )
                                     )
-                                    openTabItems = openTabItems + TabItemData(
+                                    val createdTabs = openTabItems + TabItemData(
                                         notebook = book,
                                         pageNumber = 1,
-                                        pageId = null
+                                        pageId = null,
+                                        lastOpenedAt = System.currentTimeMillis()
                                     )
-                                    persistTabsToServer(openTabItems)
+                                    openTabItems = createdTabs
+                                    persistTabsToServer(createdTabs)
                                     activeNotebookId = newId
                                     activePageIndex = 0
                                     navigateTo(ActiveScreen.WORKSPACE)

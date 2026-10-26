@@ -103,6 +103,10 @@ class SyncManager(
                 tagsCsv = r.tags?.joinToString(",") ?: "",
                 coverPreset = r.coverPreset ?: "celestial",
                 coverImage = r.coverImage,
+                // Server created_at is epoch seconds; Room stores millis.
+                createdAt = r.createdAt?.let { ts ->
+                    if (ts in 1..999_999_999_999L) ts * 1000 else ts
+                } ?: System.currentTimeMillis(),
                 updatedAt = System.currentTimeMillis()
             )
         )

@@ -34,7 +34,10 @@ import com.esper.android.ui.theme.*
 data class TabItemData(
     val notebook: NotebookEntity,
     val pageNumber: Int = 1,
-    val pageId: String? = null
+    val pageId: String? = null,
+    // Epoch millis of the last time this book was opened. The tabs sheet sorts
+    // descending so the most recently opened book is always first.
+    val lastOpenedAt: Long = 0L
 )
 
 data class RecentPageItem(
@@ -55,6 +58,8 @@ fun TabsBottomSheet(
     onNewTabClick: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val sortedTabs = remember(openTabs) { openTabs.sortedByDescending { it.lastOpenedAt } }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = CosmicSlate,
@@ -141,7 +146,7 @@ fun TabsBottomSheet(
                         }
                     }
                 } else {
-                    items(openTabs, key = { it.notebook.id }) { tab ->
+                    items(sortedTabs, key = { it.notebook.id }) { tab ->
                         val notebook = tab.notebook
                         val isActive = notebook.id == activeNotebookId
                         val theme = CoverThemeEngine.getTheme(notebook.coverPreset, notebook.coverImage)
