@@ -1,5 +1,6 @@
 package com.esper.android.ui.workspace
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -13,6 +14,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.model.QuestionEntity
 import com.esper.android.ui.components.LocalReadOnlyMode
+import com.esper.android.ui.components.UnsavedChangesDialog
+import com.esper.android.ui.components.UnsavedChangesGuard
 import com.esper.android.ui.lexical.ComposeLexicalEditor
 import com.esper.android.ui.theme.*
 
@@ -27,6 +30,19 @@ fun QuestionEditorScreen(
     val isReadOnly = LocalReadOnlyMode.current
     var title by remember(question.title) { mutableStateOf(question.title) }
     var answerContent by remember(question.answer) { mutableStateOf(question.answer) }
+    val unsavedGuard = remember { UnsavedChangesGuard() }
+
+    fun guardNavigation(action: () -> Unit) {
+        if (isReadOnly) action() else unsavedGuard.requestNavigation(action)
+    }
+
+    BackHandler {
+        if (unsavedGuard.isDialogVisible) {
+            unsavedGuard.cancel()
+        } else {
+            guardNavigation { onNavigateBack() }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -48,7 +64,7 @@ fun QuestionEditorScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
+                    IconButton(onClick = { guardNavigation { onNavigateBack() } }) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
@@ -110,10 +126,24 @@ fun QuestionEditorScreen(
             ComposeLexicalEditor(
                 initialMarkdown = answerContent,
                 onContentChanged = { updated -> answerContent = updated },
+                onHasUnsavedChangesChanged = { unsavedGuard.setDirty(it) },
                 onTimestampClicked = {},
                 modifier = Modifier.fillMaxSize(),
                 readOnly = isReadOnly
             )
         }
+    }
+
+    if (unsavedGuard.isDialogVisible) {
+        UnsavedChangesDialog(
+            title = "Unsaved Changes",
+            message = "You have unsaved changes to this answer. Do you want to save them before leaving?",
+            onSaveAndContinue = {
+                onSaveAnswer(question.id, answerContent)
+                unsavedGuard.completeAfterSave()
+            },
+            onDiscardAndContinue = { unsavedGuard.discardAndContinue() },
+            onCancel = { unsavedGuard.cancel() }
+        )
     }
 }

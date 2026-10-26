@@ -1,5 +1,6 @@
 package com.esper.android.ui.journal
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -13,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -20,8 +22,11 @@ import com.esper.android.data.model.PageEntity
 import com.esper.android.ui.components.ConfirmDeleteDialog
 import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.components.OfflineNoticeBanner
+import com.esper.android.ui.components.UnsavedChangesDialog
+import com.esper.android.ui.components.UnsavedChangesGuard
 import com.esper.android.ui.lexical.ComposeLexicalEditor
 import com.esper.android.ui.theme.*
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -36,7 +41,21 @@ fun JournalScreen(
     onSyncWithRemote: suspend () -> Unit = {}
 ) {
     val isReadOnly = LocalReadOnlyMode.current
-    BackHandler { onNavigateBack() }
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val unsavedGuard = remember { UnsavedChangesGuard() }
+
+    fun guardNavigation(action: () -> Unit) {
+        if (isReadOnly) action() else unsavedGuard.requestNavigation(action)
+    }
+
+    BackHandler {
+        if (unsavedGuard.isDialogVisible) {
+            unsavedGuard.cancel()
+        } else {
+            guardNavigation { onNavigateBack() }
+        }
+    }
 
     // Always open directly on the latest created page; keep the user's place
     // across syncs — a remote re-emission must not teleport the entry index.
@@ -51,6 +70,7 @@ fun JournalScreen(
 
     val activePage = pages.getOrNull(activePageIndex)
     var showDeleteEntryConfirm by remember { mutableStateOf(false) }
+    var currentNotes by remember(activePage?.id) { mutableStateOf(activePage?.notes ?: "") }
 
     // Hide the page stepper while the keyboard is open: otherwise it sits
     // directly above the IME and its nav-bar padding covers the editor.
@@ -89,22 +109,24 @@ fun JournalScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
+                    IconButton(onClick = { guardNavigation { onNavigateBack() } }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                     }
                 },
                 actions = {
                     if (!isReadOnly) {
                         IconButton(onClick = {
-                            val dateTitle = SimpleDateFormat("EEE, MMM d, h:mm a", Locale.getDefault()).format(Date())
-                            onCreateNewPage(dateTitle)
-                            // Jump to the newly appended latest entry.
-                            activePageIndex = pages.size
+                            guardNavigation {
+                                val dateTitle = SimpleDateFormat("EEE, MMM d, h:mm a", Locale.getDefault()).format(Date())
+                                onCreateNewPage(dateTitle)
+                                // Jump to the newly appended latest entry.
+                                activePageIndex = pages.size
+                            }
                         }) {
                             Icon(Icons.Default.Add, contentDescription = "New Entry", tint = IndigoAccent)
                         }
                         if (pages.size > 1 && activePage != null) {
-                            IconButton(onClick = { showDeleteEntryConfirm = true }) {
+                            IconButton(onClick = { guardNavigation { showDeleteEntryConfirm = true } }) {
                                 Icon(Icons.Default.Delete, contentDescription = "Delete Entry", tint = RoseRuby)
                             }
                         }
@@ -132,7 +154,7 @@ fun JournalScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         FilledTonalIconButton(
-                            onClick = { if (activePageIndex > 0) activePageIndex-- },
+                            onClick = { guardNavigation { if (activePageIndex > 0) activePageIndex-- } },
                             enabled = activePageIndex > 0,
                             colors = IconButtonDefaults.filledTonalIconButtonColors(
                                 containerColor = SurfaceSlate,
@@ -162,7 +184,7 @@ fun JournalScreen(
                         }
 
                         FilledTonalIconButton(
-                            onClick = { if (activePageIndex < pages.size - 1) activePageIndex++ },
+                            onClick = { guardNavigation { if (activePageIndex < pages.size - 1) activePageIndex++ } },
                             enabled = activePageIndex < pages.size - 1,
                             colors = IconButtonDefaults.filledTonalIconButtonColors(
                                 containerColor = SurfaceSlate,
@@ -191,7 +213,8 @@ fun JournalScreen(
                 key(activePage.id) {
                     ComposeLexicalEditor(
                         initialMarkdown = activePage.notes,
-                        onContentChanged = {},
+                        onContentChanged = { currentNotes = it },
+                        onHasUnsavedChangesChanged = { unsavedGuard.setDirty(it) },
                         onSave = { updatedNotes ->
                             onSavePageNotes(activePage.id, updatedNotes)
                         },
@@ -223,6 +246,34 @@ fun JournalScreen(
                 showDeleteEntryConfirm = false
             },
             onDismiss = { showDeleteEntryConfirm = false }
+        )
+    }
+
+    if (unsavedGuard.isDialogVisible) {
+        UnsavedChangesDialog(
+            title = "Unsaved Changes",
+            message = "You have unsaved changes in \"${activePage?.title ?: "this entry"}\". Do you want to save them before leaving?",
+            onSaveAndContinue = {
+                val pageId = activePage?.id
+                if (pageId == null) {
+                    unsavedGuard.completeAfterSave()
+                } else {
+                    coroutineScope.launch {
+                        val saved = onSavePageNotes(pageId, currentNotes)
+                        if (saved) {
+                            unsavedGuard.completeAfterSave()
+                        } else {
+                            Toast.makeText(
+                                context,
+                                "Save failed, remaining in entry",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }
+            },
+            onDiscardAndContinue = { unsavedGuard.discardAndContinue() },
+            onCancel = { unsavedGuard.cancel() }
         )
     }
 }

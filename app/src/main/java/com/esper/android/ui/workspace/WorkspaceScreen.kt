@@ -38,6 +38,8 @@ import com.esper.android.ui.components.EditorSkeleton
 import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.components.OfflineNoticeBanner
 import com.esper.android.ui.components.SimulationSkeleton
+import com.esper.android.ui.components.UnsavedChangesDialog
+import com.esper.android.ui.components.UnsavedChangesGuard
 import com.esper.android.ui.components.YouTubePlayer
 import com.esper.android.ui.components.YouTubePlayerHostState
 import com.esper.android.ui.lexical.ComposeLexicalEditor
@@ -97,6 +99,15 @@ fun WorkspaceScreen(
     val activePage = sortedPages.getOrNull(activePageIndex)
     val youtubeHostState = remember { YouTubePlayerHostState() }
 
+    // Unsaved-draft protection: every exit vector (system back, top bar back,
+    // chapter switch, tabs, journal, configure book) goes through this guard.
+    val unsavedGuard = remember { UnsavedChangesGuard() }
+    var currentNotes by remember(activePage?.id) { mutableStateOf(activePage?.notes ?: "") }
+
+    fun guardNavigation(action: () -> Unit) {
+        if (isReadOnly) action() else unsavedGuard.requestNavigation(action)
+    }
+
     val attachedCanvas = remember(canvases, activePage?.id) {
         activePage?.let { page ->
             canvases.firstOrNull { c ->
@@ -124,10 +135,12 @@ fun WorkspaceScreen(
     var simWebView by remember { mutableStateOf<WebView?>(null) }
 
     BackHandler {
-        if (leftChaptersDrawerState.isOpen) {
+        if (unsavedGuard.isDialogVisible) {
+            unsavedGuard.cancel()
+        } else if (leftChaptersDrawerState.isOpen) {
             coroutineScope.launch { leftChaptersDrawerState.close() }
         } else {
-            onNavigateBack()
+            guardNavigation { onNavigateBack() }
         }
     }
 
@@ -145,8 +158,10 @@ fun WorkspaceScreen(
                 canvases = canvases,
                 activePageIndex = activePageIndex,
                 onSelectPage = { idx ->
-                    coroutineScope.launch { leftChaptersDrawerState.close() }
-                    onSelectPage(idx)
+                    guardNavigation {
+                        coroutineScope.launch { leftChaptersDrawerState.close() }
+                        onSelectPage(idx)
+                    }
                 },
                 onCreatePage = onCreatePage,
                 onDeletePage = onDeletePage
@@ -175,7 +190,7 @@ fun WorkspaceScreen(
                     },
                     navigationIcon = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = onNavigateBack) {
+                            IconButton(onClick = { guardNavigation { onNavigateBack() } }) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                             }
                             IconButton(onClick = { coroutineScope.launch { leftChaptersDrawerState.open() } }) {
@@ -194,7 +209,7 @@ fun WorkspaceScreen(
                             Icon(Icons.Default.ChatBubbleOutline, contentDescription = "Discussion", tint = IndigoGlow)
                         }
                         if (!isReadOnly) {
-                            IconButton(onClick = onOpenConfigureBook) {
+                            IconButton(onClick = { guardNavigation { onOpenConfigureBook() } }) {
                                 Icon(Icons.Default.Tune, contentDescription = "Configure Book", tint = IndigoGlow)
                             }
                         }
@@ -237,7 +252,7 @@ fun WorkspaceScreen(
                                 // LEFT — Journal
                                 NavigationBarItem(
                                     selected = false,
-                                    onClick = onOpenJournal,
+                                    onClick = { guardNavigation { onOpenJournal() } },
                                     icon = {
                                         Icon(
                                             Icons.Default.EditNote,
@@ -283,7 +298,7 @@ fun WorkspaceScreen(
                                 // RIGHT — Tabs
                                 NavigationBarItem(
                                     selected = false,
-                                    onClick = onOpenTabsScreen,
+                                    onClick = { guardNavigation { onOpenTabsScreen() } },
                                     icon = {
                                         Icon(
                                             Icons.Default.Layers,
@@ -357,7 +372,8 @@ fun WorkspaceScreen(
                                 key(page.id) {
                                 ComposeLexicalEditor(
                                     initialMarkdown = page.notes,
-                                    onContentChanged = {},
+                                    onContentChanged = { currentNotes = it },
+                                    onHasUnsavedChangesChanged = { unsavedGuard.setDirty(it) },
                                     onSave = { updatedNotes ->
                                         onSaveNotes(page.id, updatedNotes)
                                     },
@@ -537,7 +553,8 @@ fun WorkspaceScreen(
                                         key(page.id) {
                                         ComposeLexicalEditor(
                                             initialMarkdown = page.notes,
-                                            onContentChanged = {},
+                                            onContentChanged = { currentNotes = it },
+                                            onHasUnsavedChangesChanged = { unsavedGuard.setDirty(it) },
                                             onSave = { updatedNotes ->
                                                 onSaveNotes(page.id, updatedNotes)
                                             },
@@ -630,6 +647,34 @@ fun WorkspaceScreen(
                 }
             }
         }
+    }
+
+    if (unsavedGuard.isDialogVisible) {
+        UnsavedChangesDialog(
+            title = "Unsaved Changes",
+            message = "You have unsaved changes in \"${activePage?.title ?: "this chapter"}\". Do you want to save them before leaving?",
+            onSaveAndContinue = {
+                val pageId = activePage?.id
+                if (pageId == null) {
+                    unsavedGuard.completeAfterSave()
+                } else {
+                    coroutineScope.launch {
+                        val saved = onSaveNotes(pageId, currentNotes)
+                        if (saved) {
+                            unsavedGuard.completeAfterSave()
+                        } else {
+                            Toast.makeText(
+                                context,
+                                "Save failed, remaining in chapter",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }
+            },
+            onDiscardAndContinue = { unsavedGuard.discardAndContinue() },
+            onCancel = { unsavedGuard.cancel() }
+        )
     }
 }
 

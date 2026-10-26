@@ -216,6 +216,11 @@ private val CodeTextColor = Color(0xFFE0E7FF)
 fun ComposeLexicalEditor(
     initialMarkdown: String,
     onContentChanged: ((String) -> Unit)? = null,
+    /**
+     * Reports dirty/clean transitions so the surrounding screen can guard
+     * navigation before in-memory edits are lost.
+     */
+    onHasUnsavedChangesChanged: ((Boolean) -> Unit)? = null,
     /** Explicit save handler. Returns true when the server confirmed the write. */
     onSave: (suspend (String) -> Boolean)? = null,
     /** Explicit pull-to-refresh handler. */
@@ -229,6 +234,7 @@ fun ComposeLexicalEditor(
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
     val currentOnContentChanged by rememberUpdatedState(onContentChanged)
+    val currentOnHasUnsavedChangesChanged by rememberUpdatedState(onHasUnsavedChangesChanged)
 
     // A MutableState (not a captured local) so several edits in the same frame
     // always build on the newest text instead of a stale snapshot.
@@ -243,6 +249,12 @@ fun ComposeLexicalEditor(
     var saveStatusMessage by remember { mutableStateOf<String?>(null) }
     var isRefreshing by remember { mutableStateOf(false) }
     val hasUnsavedChanges = rawText != lastSavedText
+
+    // Let the host screen know whenever the draft becomes dirty/clean. This is
+    // the single source of truth used by the navigation guards.
+    LaunchedEffect(hasUnsavedChanges) {
+        currentOnHasUnsavedChangesChanged?.invoke(hasUnsavedChanges)
+    }
 
     val blocks = remember(rawText) { LexicalParser.parseToLexicalAst(rawText) }
 
@@ -491,7 +503,13 @@ fun ComposeLexicalEditor(
     // lose. Unsaved local edits stay put until the user saves or explicitly
     // pulls to refresh; background Room syncs can no longer clobber a draft.
     LaunchedEffect(initialMarkdown) {
-        if (textState.value == initialMarkdown) return@LaunchedEffect
+        if (textState.value == initialMarkdown) {
+            // The persisted copy caught up with what is on screen (for example
+            // after a Save). Treat it as the new saved baseline so the editor
+            // stops reporting a dirty draft.
+            if (lastSavedText != initialMarkdown) lastSavedText = initialMarkdown
+            return@LaunchedEffect
+        }
         if (!hasUnsavedChanges || isRefreshing) {
             renderExternal(initialMarkdown)
             lastSavedText = initialMarkdown
