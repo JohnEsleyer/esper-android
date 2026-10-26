@@ -80,7 +80,10 @@ data class RemoteNotebook(
     val canvases: List<RemoteCanvas>?,
     val questions: List<RemoteQuestion>?,
     // Epoch seconds on the server; converted to millis when stored locally.
-    val createdAt: Long? = null
+    @SerializedName(value = "createdAt", alternate = ["created_at"])
+    val createdAt: Long? = null,
+    @SerializedName(value = "updatedAt", alternate = ["updated_at"])
+    val updatedAt: Long? = null
 )
 
 data class RemoteTabItem(

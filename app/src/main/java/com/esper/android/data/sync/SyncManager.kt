@@ -88,10 +88,37 @@ class SyncManager(
     }
 
     /**
+     * Targeted, read-only pull of one notebook, used by pull-to-refresh inside
+     * the workspace and the journal. It never pushes and never touches other
+     * books or the shelf list, so an in-book refresh cannot reconcile the whole
+     * account underneath the editor.
+     *
+     * Throws on failure; a 404 means the book was deleted on another device.
+     */
+    suspend fun syncNotebook(
+        docId: String,
+        ownerSub: String?,
+        guestToken: String? = null,
+    ): RemoteNotebook {
+        val remote = api.getNote(docId, guestToken)
+        upsertRemoteNotebook(remote, ownerSub)
+        return remote
+    }
+
+    /**
      * Writes one remote notebook (with its pages, canvases and questions) into Room.
      * Reused by full sync, protected unlock, and journal adoption.
      */
     suspend fun upsertRemoteNotebook(r: RemoteNotebook, ownerSub: String?) {
+        // Keep the original creation date when the payload omits created_at
+        // instead of resetting it to "now" on every sync.
+        val existing = db.dao().getNotebookById(r.id)
+        val remoteCreatedAt = r.createdAt?.let { ts ->
+            if (ts in 1..999_999_999_999L) ts * 1000 else ts
+        } ?: r.updatedAt?.let { ts ->
+            if (ts in 1..999_999_999_999L) ts * 1000 else ts
+        } ?: existing?.createdAt ?: System.currentTimeMillis()
+
         db.dao().upsertNotebook(
             NotebookEntity(
                 id = r.id,
@@ -103,10 +130,7 @@ class SyncManager(
                 tagsCsv = r.tags?.joinToString(",") ?: "",
                 coverPreset = r.coverPreset ?: "celestial",
                 coverImage = r.coverImage,
-                // Server created_at is epoch seconds; Room stores millis.
-                createdAt = r.createdAt?.let { ts ->
-                    if (ts in 1..999_999_999_999L) ts * 1000 else ts
-                } ?: System.currentTimeMillis(),
+                createdAt = remoteCreatedAt,
                 updatedAt = System.currentTimeMillis()
             )
         )

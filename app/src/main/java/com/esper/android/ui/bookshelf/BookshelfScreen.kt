@@ -52,8 +52,8 @@ import kotlin.math.ceil
 
 enum class BookSortOption(val label: String) {
     RECENTLY_UPDATED("Recently Updated"),
-    RECENTLY_CREATED("Recently Created"),
     OLDEST_UPDATED("Oldest Updated"),
+    RECENTLY_CREATED("Recently Created"),
     OLDEST_CREATED("Oldest Created"),
     TITLE_AZ("Title (A-Z)"),
     TITLE_ZA("Title (Z-A)")

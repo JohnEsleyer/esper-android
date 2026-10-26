@@ -906,25 +906,50 @@ class MainActivity : ComponentActivity() {
                             onSyncWithRemote = {
                                 withContext(Dispatchers.IO) {
                                     try {
-                                        val report = syncManager.sync(currentUser?.uid)
+                                        syncManager.syncNotebook(currentJournalId, currentUser?.uid)
                                         withContext(Dispatchers.Main) {
                                             Toast.makeText(
                                                 applicationContext,
-                                                "Synced ${report.noteCount} notebooks",
+                                                "Refreshed journal",
                                                 Toast.LENGTH_SHORT
                                             ).show()
                                             lastSyncError = null
                                         }
                                         flushWriteQueue()
                                     } catch (e: Exception) {
-                                        val reason = e.localizedMessage ?: e.javaClass.simpleName
-                                        withContext(Dispatchers.Main) {
-                                            Toast.makeText(
-                                                applicationContext,
-                                                "Sync failed: $reason",
-                                                Toast.LENGTH_LONG
-                                            ).show()
-                                            lastSyncError = reason
+                                        if (e is retrofit2.HttpException && e.code() == 404) {
+                                            // No server copy yet: create it from the
+                                            // local journal instead of treating the
+                                            // refresh as a failure.
+                                            val pushed = try {
+                                                val details = db.dao().getNotebookDetails(currentJournalId)
+                                                if (hasMeaningfulJournalContent(details)) {
+                                                    pushFullBook(currentJournalId)
+                                                    true
+                                                } else false
+                                            } catch (pushErr: Exception) {
+                                                Log.w("EsperSync", "Journal push after 404 failed", pushErr)
+                                                false
+                                            }
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(
+                                                    applicationContext,
+                                                    if (pushed) "Journal created on server"
+                                                    else "Journal is empty — nothing to sync",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                                lastSyncError = if (pushed) null else "Journal not on server"
+                                            }
+                                        } else {
+                                            val reason = e.localizedMessage ?: e.javaClass.simpleName
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(
+                                                    applicationContext,
+                                                    "Refresh failed: $reason",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                                lastSyncError = reason
+                                            }
                                         }
                                     }
                                 }
@@ -1420,25 +1445,55 @@ class MainActivity : ComponentActivity() {
                                 onSyncWithRemote = {
                                     withContext(Dispatchers.IO) {
                                         try {
-                                            val report = syncManager.sync(currentUser?.uid)
+                                            val remote = syncManager.syncNotebook(
+                                                workspaceBookId,
+                                                currentUser?.uid,
+                                                guestTokens.get(workspaceBookId)
+                                            )
                                             withContext(Dispatchers.Main) {
                                                 Toast.makeText(
                                                     applicationContext,
-                                                    "Synced ${report.noteCount} notebooks",
+                                                    "Refreshed \"${remote.title}\"",
                                                     Toast.LENGTH_SHORT
                                                 ).show()
                                                 lastSyncError = null
                                             }
                                             flushWriteQueue()
                                         } catch (e: Exception) {
-                                            val reason = e.localizedMessage ?: e.javaClass.simpleName
-                                            withContext(Dispatchers.Main) {
-                                                Toast.makeText(
-                                                    applicationContext,
-                                                    "Sync failed: $reason",
-                                                    Toast.LENGTH_LONG
-                                                ).show()
-                                                lastSyncError = reason
+                                            if (e is retrofit2.HttpException && e.code() == 404) {
+                                                // Deleted on another device: drop the
+                                                // local copy and close its tab.
+                                                db.dao().deleteNotebookCascade(workspaceBookId)
+                                                withContext(Dispatchers.Main) {
+                                                    val remaining = openTabItems.filter {
+                                                        it.notebook.id != workspaceBookId
+                                                    }
+                                                    openTabItems = remaining
+                                                    persistTabsToServer(remaining)
+                                                    val next = remaining.lastOrNull()
+                                                    activeNotebookId = next?.notebook?.id
+                                                    activePageIndex = (next?.pageNumber ?: 1) - 1
+                                                    if (activeNotebookId == null) {
+                                                        activePageIndex = 0
+                                                        navigateTo(ActiveScreen.BOOKSHELF)
+                                                    }
+                                                    Toast.makeText(
+                                                        applicationContext,
+                                                        "Notebook no longer exists on server",
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                    lastSyncError = "Notebook no longer exists on server"
+                                                }
+                                            } else {
+                                                val reason = e.localizedMessage ?: e.javaClass.simpleName
+                                                withContext(Dispatchers.Main) {
+                                                    Toast.makeText(
+                                                        applicationContext,
+                                                        "Refresh failed: $reason",
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                    lastSyncError = reason
+                                                }
                                             }
                                         }
                                     }
