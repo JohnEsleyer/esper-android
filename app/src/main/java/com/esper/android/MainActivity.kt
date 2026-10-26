@@ -11,9 +11,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.room.Room
 import com.esper.android.data.export.ZipExporter
 import com.esper.android.data.export.ZipImporter
@@ -745,47 +742,20 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Real-time: refetch on foreground resume so edits made on
-                // web while the app was backgrounded appear immediately.
-                val lifecycleOwner = LocalLifecycleOwner.current
-                DisposableEffect(lifecycleOwner) {
-                    val observer = LifecycleEventObserver { _, event ->
-                        if (event == Lifecycle.Event.ON_RESUME) {
-                            if (currentUser != null || isOfflineMode) syncWithCloud()
-                        }
-                    }
-                    lifecycleOwner.lifecycle.addObserver(observer)
-                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-                }
+                // Sync is deliberately manual. Creating an entry, saving an
+                // editor draft, pulling to refresh (bookshelf/editor) or using
+                // Settings > Sync now are the only paths that touch the server.
+                // Background pulls used to overwrite in-flight local edits.
 
-                // Re-sync when connectivity returns (heals reads that failed
-                // offline; queued writes flush right after the fresh sync).
+                // Reconnect only heals queued writes. It must not pull fresh
+                // server state over a note the user is still editing.
                 LaunchedEffect(Unit) {
                     var wasOnline = true
                     NetworkMonitor.observe(applicationContext).collect { online ->
                         if (online && !wasOnline && currentUser != null) {
-                            syncWithCloud()
                             flushWriteQueue()
                         }
                         wasOnline = online
-                    }
-                }
-
-                // Real-time: long-lived SSE reader. Any broadcast data line
-                // triggers a background sync; reconnects with backoff.
-                // Derived from the effective base URL so local dev still works.
-                // Quiet: our own saves echo back as events; a full pull after
-                // every keystroke debounce would nag (and re-emit Room under
-                // the editor) — so these run toast-free.
-                LaunchedEffect(Unit) {
-                    syncManager.watchEvents(this, RemoteClient.baseUrl(applicationContext)) {
-                        val now = System.currentTimeMillis()
-                        if (now - lastLocalSaveTime < 3500L) {
-                            // Self-echo from our own local save. Suppress quiet sync to prevent
-                            // Room re-emissions from disrupting active typing.
-                            return@watchEvents
-                        }
-                        syncWithCloud(quiet = true)
                     }
                 }
 
@@ -863,18 +833,18 @@ class MainActivity : ComponentActivity() {
                         JournalScreen(
                             pages = journalPages,
                             onSavePageNotes = { pageId, text ->
-                                if (isReadOnly) return@JournalScreen
                                 lastLocalSaveTime = System.currentTimeMillis()
-                                coroutineScope.launch {
-                                    val derivedTitle = deriveChapterTitle(text)
-                                    db.dao().updatePageNotesAndTitle(currentJournalId, pageId, text, derivedTitle)
-                                    db.dao().updateNotebookUpdatedAt(currentJournalId, System.currentTimeMillis())
-                                    val journalOp = SyncOp.PatchPage(currentJournalId, pageId)
-                                    writeQueue.markDirty(journalOp)
-                                    launch(Dispatchers.IO) {
-                                        if (replayOp(journalOp)) {
-                                            writeQueue.markClean(journalOp)
-                                        }
+                                val derivedTitle = deriveChapterTitle(text)
+                                db.dao().updatePageNotesAndTitle(currentJournalId, pageId, text, derivedTitle)
+                                db.dao().updateNotebookUpdatedAt(currentJournalId, System.currentTimeMillis())
+                                val journalOp = SyncOp.PatchPage(currentJournalId, pageId)
+                                writeQueue.markDirty(journalOp)
+                                withContext(Dispatchers.IO) {
+                                    if (replayOp(journalOp)) {
+                                        writeQueue.markClean(journalOp)
+                                        true
+                                    } else {
+                                        false
                                     }
                                 }
                             },
@@ -911,6 +881,32 @@ class MainActivity : ComponentActivity() {
                                     launch(Dispatchers.IO) {
                                         if (replayOp(delOp)) {
                                             writeQueue.markClean(delOp)
+                                        }
+                                    }
+                                }
+                            },
+                            onSyncWithRemote = {
+                                withContext(Dispatchers.IO) {
+                                    try {
+                                        val report = syncManager.sync(currentUser?.uid)
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(
+                                                applicationContext,
+                                                "Synced ${report.noteCount} notebooks",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                            lastSyncError = null
+                                        }
+                                        flushWriteQueue()
+                                    } catch (e: Exception) {
+                                        val reason = e.localizedMessage ?: e.javaClass.simpleName
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(
+                                                applicationContext,
+                                                "Sync failed: $reason",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                            lastSyncError = reason
                                         }
                                     }
                                 }
@@ -1315,27 +1311,26 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onSaveNotes = { pageId, text ->
-                                    if (isReadOnly) return@WorkspaceScreen
                                     lastLocalSaveTime = System.currentTimeMillis()
-                                    coroutineScope.launch {
-                                        // Parity with web extractFirstLineTitle: keep sidebar
-                                        // title in sync with the first markdown line.
-                                        val derivedTitle = deriveChapterTitle(text)
-                                        db.dao().updatePageNotesAndTitle(book.notebook.id, pageId, text, derivedTitle)
-                                        db.dao().updateNotebookUpdatedAt(book.notebook.id, System.currentTimeMillis())
-                                        val patchOp = SyncOp.PatchPage(book.notebook.id, pageId)
-                                        writeQueue.markDirty(patchOp)
-                                        launch(Dispatchers.IO) {
-                                            try {
-                                                api.patchPage(
-                                                    book.notebook.id,
-                                                    pageId,
-                                                    mapOf("notes" to text, "title" to derivedTitle)
-                                                )
-                                                writeQueue.markClean(patchOp)
-                                            } catch (e: Exception) {
-                                                Log.w("EsperSync", "patchPage failed for $pageId", e)
-                                            }
+                                    // Parity with web extractFirstLineTitle: keep sidebar
+                                    // title in sync with the first markdown line.
+                                    val derivedTitle = deriveChapterTitle(text)
+                                    db.dao().updatePageNotesAndTitle(book.notebook.id, pageId, text, derivedTitle)
+                                    db.dao().updateNotebookUpdatedAt(book.notebook.id, System.currentTimeMillis())
+                                    val patchOp = SyncOp.PatchPage(book.notebook.id, pageId)
+                                    writeQueue.markDirty(patchOp)
+                                    withContext(Dispatchers.IO) {
+                                        try {
+                                            api.patchPage(
+                                                book.notebook.id,
+                                                pageId,
+                                                mapOf("notes" to text, "title" to derivedTitle)
+                                            )
+                                            writeQueue.markClean(patchOp)
+                                            true
+                                        } catch (e: Exception) {
+                                            Log.w("EsperSync", "patchPage failed for $pageId", e)
+                                            false
                                         }
                                     }
                                 },
@@ -1400,6 +1395,32 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onOpenQuestionEditor = { question ->
                                     activeEditingQuestion = question
+                                },
+                                onSyncWithRemote = {
+                                    withContext(Dispatchers.IO) {
+                                        try {
+                                            val report = syncManager.sync(currentUser?.uid)
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(
+                                                    applicationContext,
+                                                    "Synced ${report.noteCount} notebooks",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                                lastSyncError = null
+                                            }
+                                            flushWriteQueue()
+                                        } catch (e: Exception) {
+                                            val reason = e.localizedMessage ?: e.javaClass.simpleName
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(
+                                                    applicationContext,
+                                                    "Sync failed: $reason",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                                lastSyncError = reason
+                                            }
+                                        }
+                                    }
                                 }
                             )
                         }

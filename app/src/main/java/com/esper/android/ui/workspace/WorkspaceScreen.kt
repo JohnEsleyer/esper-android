@@ -66,14 +66,15 @@ fun WorkspaceScreen(
     onSelectPage: (Int) -> Unit,
     onCreatePage: (title: String, parentId: String?) -> Unit,
     onDeletePage: (pageId: String) -> Unit,
-    onSaveNotes: (pageId: String, content: String) -> Unit,
+    onSaveNotes: suspend (pageId: String, content: String) -> Boolean,
     onAttachCanvas: (title: String, kind: String, payload: String) -> Unit,
     onDeleteCanvas: (canvasId: String) -> Unit,
     onUpdateCanvasPayload: (canvasId: String, payload: String) -> Unit,
     onAssignCanvasToPage: (canvasId: String) -> Unit = {},
     onCreateQuestion: (title: String) -> Unit,
     onDeleteQuestion: (questionId: String) -> Unit,
-    onOpenQuestionEditor: (QuestionEntity) -> Unit
+    onOpenQuestionEditor: (QuestionEntity) -> Unit,
+    onSyncWithRemote: suspend () -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -349,8 +350,12 @@ fun WorkspaceScreen(
                                 key(page.id) {
                                 ComposeLexicalEditor(
                                     initialMarkdown = page.notes,
-                                    onContentChanged = { updatedNotes ->
+                                    onContentChanged = {},
+                                    onSave = { updatedNotes ->
                                         onSaveNotes(page.id, updatedNotes)
+                                    },
+                                    onRefresh = {
+                                        onSyncWithRemote()
                                     },
                                     onTimestampClicked = { seconds ->
                                         Toast.makeText(context, "Timestamp: ${seconds}s", Toast.LENGTH_SHORT).show()
@@ -525,8 +530,12 @@ fun WorkspaceScreen(
                                         key(page.id) {
                                         ComposeLexicalEditor(
                                             initialMarkdown = page.notes,
-                                            onContentChanged = { updatedNotes ->
+                                            onContentChanged = {},
+                                            onSave = { updatedNotes ->
                                                 onSaveNotes(page.id, updatedNotes)
+                                            },
+                                            onRefresh = {
+                                                onSyncWithRemote()
                                             },
                                             onTimestampClicked = { seconds ->
                                                 Toast.makeText(context, "Seeking to ${seconds}s", Toast.LENGTH_SHORT).show()

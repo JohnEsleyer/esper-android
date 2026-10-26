@@ -109,10 +109,7 @@ fun QuestionEditorScreen(
             // Full-screen KaTeX & Markdown Editor for the Answer
             ComposeLexicalEditor(
                 initialMarkdown = answerContent,
-                onContentChanged = { updated ->
-                    answerContent = updated
-                    onSaveAnswer(question.id, updated)
-                },
+                onContentChanged = { updated -> answerContent = updated },
                 onTimestampClicked = {},
                 modifier = Modifier.fillMaxSize(),
                 readOnly = isReadOnly

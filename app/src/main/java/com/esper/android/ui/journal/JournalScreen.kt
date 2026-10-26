@@ -29,10 +29,11 @@ import java.util.*
 @Composable
 fun JournalScreen(
     pages: List<PageEntity>,
-    onSavePageNotes: (pageId: String, notes: String) -> Unit,
+    onSavePageNotes: suspend (pageId: String, notes: String) -> Boolean,
     onCreateNewPage: (title: String) -> Unit,
     onDeletePage: (pageId: String) -> Unit,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    onSyncWithRemote: suspend () -> Unit = {}
 ) {
     val isReadOnly = LocalReadOnlyMode.current
     BackHandler { onNavigateBack() }
@@ -186,8 +187,12 @@ fun JournalScreen(
                 key(activePage.id) {
                     ComposeLexicalEditor(
                         initialMarkdown = activePage.notes,
-                        onContentChanged = { updatedNotes ->
+                        onContentChanged = {},
+                        onSave = { updatedNotes ->
                             onSavePageNotes(activePage.id, updatedNotes)
+                        },
+                        onRefresh = {
+                            onSyncWithRemote()
                         },
                         onTimestampClicked = {},
                         modifier = Modifier.fillMaxSize(),

@@ -39,10 +39,16 @@ fun PullToRefreshLayout(
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
     refreshThresholdDp: Float = 80f,
+    refreshingText: String = "Syncing notebooks...",
     content: @Composable () -> Unit
 ) {
     val density = LocalDensity.current
     val thresholdPx = with(density) { refreshThresholdDp.dp.toPx() }
+
+    // The connection object is created once, so read the latest values through
+    // state holders instead of capturing the first composition's parameters.
+    val currentIsRefreshing by rememberUpdatedState(isRefreshing)
+    val currentOnRefresh by rememberUpdatedState(onRefresh)
 
     var pullDistance by remember { mutableFloatStateOf(0f) }
 
@@ -84,8 +90,8 @@ fun PullToRefreshLayout(
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (pullDistance >= thresholdPx && !isRefreshing) {
-                    onRefresh()
+                if (pullDistance >= thresholdPx && !currentIsRefreshing) {
+                    currentOnRefresh()
                 }
                 pullDistance = 0f
                 return Velocity.Zero
@@ -145,7 +151,7 @@ fun PullToRefreshLayout(
                         )
                     }
                     Text(
-                        text = if (isRefreshing) "Syncing notebooks..." else if (pullDistance >= thresholdPx) "Release to refresh" else "Pull down to refresh",
+                        text = if (isRefreshing) refreshingText else if (pullDistance >= thresholdPx) "Release to refresh" else "Pull down to refresh",
                         color = if (isRefreshing) IndigoGlow else TextPrimary,
                         fontSize = 12.sp
                     )
