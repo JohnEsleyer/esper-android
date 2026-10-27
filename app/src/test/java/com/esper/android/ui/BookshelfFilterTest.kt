@@ -121,6 +121,46 @@ class BookshelfFilterTest {
         assertEquals(3, result.size)
     }
 
+    // ------------------------------------------------- shelf membership edits
+
+    @Test
+    fun `addBookToShelf adds book to empty or existing shelf`() {
+        val emptyResult = BookshelfFiltering.addBookToShelf("", "book-1")
+        assertEquals("book-1", emptyResult)
+
+        val existingResult = BookshelfFiltering.addBookToShelf("book-1,book-2", "book-3")
+        val ids = BookshelfFiltering.shelfBookIds(existingResult)
+        assertEquals(setOf("book-1", "book-2", "book-3"), ids)
+    }
+
+    @Test
+    fun `addBookToShelf does not duplicate an existing book`() {
+        val result = BookshelfFiltering.addBookToShelf("book-1,book-2", "book-1")
+        assertEquals(setOf("book-1", "book-2"), BookshelfFiltering.shelfBookIds(result))
+    }
+
+    @Test
+    fun `removeBookFromShelf removes book from shelf`() {
+        val result = BookshelfFiltering.removeBookFromShelf("book-1,book-2,book-3", "book-2")
+        val ids = BookshelfFiltering.shelfBookIds(result)
+        assertEquals(setOf("book-1", "book-3"), ids)
+    }
+
+    @Test
+    fun `removeBookFromShelf leaves other shelves untouched`() {
+        val result = BookshelfFiltering.removeBookFromShelf("book-1,book-10", "book-1")
+        assertEquals(setOf("book-10"), BookshelfFiltering.shelfBookIds(result))
+    }
+
+    @Test
+    fun `toggleBookOnShelf adds when absent and removes when present`() {
+        val added = BookshelfFiltering.toggleBookOnShelf("book-1", "book-2")
+        assertEquals(setOf("book-1", "book-2"), BookshelfFiltering.shelfBookIds(added))
+
+        val removed = BookshelfFiltering.toggleBookOnShelf(added, "book-1")
+        assertEquals(setOf("book-2"), BookshelfFiltering.shelfBookIds(removed))
+    }
+
     // ----------------------------------------------------------- tag matching
 
     @Test

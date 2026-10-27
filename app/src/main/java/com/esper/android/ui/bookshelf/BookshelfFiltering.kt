@@ -29,6 +29,32 @@ object BookshelfFiltering {
             ?.toSet()
             ?: emptySet()
 
+    /** Adds a bookId to a shelf's notebookIdsCsv, returning the new CSV. */
+    fun addBookToShelf(notebookIdsCsv: String?, bookId: String): String {
+        val ids = shelfBookIds(notebookIdsCsv).toMutableSet()
+        ids.add(bookId.trim())
+        return ids.joinToString(",")
+    }
+
+    /** Removes a bookId from a shelf's notebookIdsCsv, returning the new CSV. */
+    fun removeBookFromShelf(notebookIdsCsv: String?, bookId: String): String {
+        val ids = shelfBookIds(notebookIdsCsv).toMutableSet()
+        ids.remove(bookId.trim())
+        return ids.joinToString(",")
+    }
+
+    /** Toggles book membership on a shelf, returning the new CSV. */
+    fun toggleBookOnShelf(notebookIdsCsv: String?, bookId: String): String {
+        val ids = shelfBookIds(notebookIdsCsv).toMutableSet()
+        val cleanId = bookId.trim()
+        if (ids.contains(cleanId)) {
+            ids.remove(cleanId)
+        } else {
+            ids.add(cleanId)
+        }
+        return ids.joinToString(",")
+    }
+
     /** A book matches a tag when one of its tags equals the filter exactly. */
     fun matchesTag(tagsCsv: String, tagFilter: String): Boolean {
         if (tagFilter == "All") return true

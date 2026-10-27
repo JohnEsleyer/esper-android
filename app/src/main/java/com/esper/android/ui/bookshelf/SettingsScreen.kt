@@ -13,6 +13,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Upload
@@ -31,6 +34,9 @@ import com.esper.android.ui.components.LocalReadOnlyMode
 import com.esper.android.ui.components.OfflineNoticeBanner
 import com.esper.android.ui.theme.*
 import com.google.firebase.auth.FirebaseUser
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,7 +58,14 @@ fun SettingsScreen(
     onImportPackage: (Uri) -> Unit,
     onSyncNow: () -> Unit,
     onSignOut: () -> Unit,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    isOfflineMode: Boolean = false,
+    onToggleOfflineMode: (Boolean) -> Unit = {},
+    offlineVersionTimestamp: Long? = null,
+    offlineVersionSummary: String? = null,
+    isCreatingOfflineVersion: Boolean = false,
+    onCreateOfflineVersion: () -> Unit = {},
+    onLoadOfflineMode: () -> Unit = {}
 ) {
     val isReadOnly = LocalReadOnlyMode.current
     var nameInput by remember(currentDisplayName) { mutableStateOf(currentDisplayName) }
@@ -66,8 +79,15 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             Column {
-                if (isReadOnly) {
-                    OfflineNoticeBanner()
+                if (isReadOnly || isOfflineMode) {
+                    OfflineNoticeBanner(
+                        message = if (isOfflineMode) {
+                            "Offline Mode Active — Using local offline data."
+                        } else {
+                            "Network Offline — Working with local data."
+                        },
+                        onToggleOnline = { onToggleOfflineMode(false) }
+                    )
                 }
                 TopAppBar(
                     title = { Text("Settings & Workspace", fontWeight = FontWeight.Bold, color = TextPrimary) },
@@ -159,6 +179,162 @@ fun SettingsScreen(
                     }
                     if (isSavedNotice) {
                         Text("✓ Display name updated", color = EmeraldSync, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+                    }
+                }
+            }
+
+            // Offline Mode & Data Management Card
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = CosmicSlate,
+                border = BorderStroke(1.dp, if (isOfflineMode) AmberGlow.copy(alpha = 0.6f) else BorderSlate)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Offline Mode",
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                text = if (isOfflineMode) {
+                                    "Currently in Offline Mode (Working with local data)"
+                                } else {
+                                    "Currently in Online Mode (Cloud sync enabled)"
+                                },
+                                color = if (isOfflineMode) AmberGlow else TextMuted,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Switch(
+                            checked = isOfflineMode,
+                            onCheckedChange = onToggleOfflineMode,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = AmberGlow,
+                                checkedTrackColor = AmberGlow.copy(alpha = 0.35f),
+                                uncheckedThumbColor = IndigoAccent,
+                                uncheckedTrackColor = SurfaceSlate
+                            )
+                        )
+                    }
+
+                    HorizontalDivider(color = BorderSlate.copy(alpha = 0.5f), thickness = 1.dp)
+
+                    Text(
+                        text = "Offline Data Version",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+
+                    val formattedOfflineDate = remember(offlineVersionTimestamp) {
+                        offlineVersionTimestamp?.let {
+                            try {
+                                SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault()).format(Date(it))
+                            } catch (_: Exception) {
+                                null
+                            }
+                        }
+                    }
+
+                    if (formattedOfflineDate != null) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = SurfaceSlate.copy(alpha = 0.6f),
+                            border = BorderStroke(1.dp, EmeraldSync.copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = EmeraldSync,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "Offline snapshot: $formattedOfflineDate",
+                                        color = TextPrimary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    if (!offlineVersionSummary.isNullOrBlank()) {
+                                        Text(
+                                            text = offlineVersionSummary,
+                                            color = TextMuted,
+                                            fontSize = 10.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = "No offline version created yet. Create an offline version to cache all your books and chapters for offline access.",
+                            color = TextMuted,
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = onCreateOfflineVersion,
+                            enabled = !isCreatingOfflineVersion,
+                            colors = ButtonDefaults.buttonColors(containerColor = IndigoAccent),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            if (isCreatingOfflineVersion) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    color = Color.White,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Creating...", fontSize = 11.sp)
+                            } else {
+                                Icon(
+                                    Icons.Default.CloudDownload,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    if (offlineVersionTimestamp != null) "Update Offline Data" else "Create Offline Version",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        OutlinedButton(
+                            onClick = onLoadOfflineMode,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AmberGlow),
+                            border = BorderStroke(1.dp, AmberGlow.copy(alpha = 0.6f)),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                Icons.Default.CloudOff,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Load Offline Mode", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }

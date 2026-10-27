@@ -8,13 +8,16 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -22,6 +25,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -32,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.esper.android.data.model.NotebookEntity
+import com.esper.android.data.model.ShelfEntity
 import com.esper.android.ui.theme.*
 
 const val LLM_COVER_PROMPT_TEMPLATE = """You are an award-winning book cover designer and master SVG vector artist.
@@ -56,6 +61,9 @@ Begin."""
 @Composable
 fun ConfigureNotebookScreen(
     notebook: NotebookEntity,
+    shelves: List<ShelfEntity> = emptyList(),
+    onToggleBookShelf: (bookId: String, shelfId: String) -> Unit = { _, _ -> },
+    onCreateShelf: (title: String, description: String, color: String, initialBookId: String?) -> Unit = { _, _, _, _ -> },
     onSaveConfig: (
         title: String,
         description: String,
@@ -79,6 +87,9 @@ fun ConfigureNotebookScreen(
     var visibility by remember { mutableStateOf(notebook.visibility) }
     var passwordInput by remember { mutableStateOf("") }
     var isCopiedPrompt by remember { mutableStateOf(false) }
+
+    var showSetShelfDialog by remember { mutableStateOf(false) }
+    var showCreateShelfDialog by remember { mutableStateOf(false) }
 
     fun sanitizeCover(input: String): String? {
         val trimmed = input.trim()
@@ -259,6 +270,66 @@ fun ConfigureNotebookScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
+            // Bookshelf assignment section
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = CosmicSlate,
+                border = BorderStroke(1.dp, BorderSlate)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Folder, contentDescription = null, tint = IndigoGlow, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Bookshelves", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        TextButton(
+                            onClick = { showSetShelfDialog = true },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text("Set Bookshelf", color = IndigoGlow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    val assignedShelves = remember(shelves, notebook.id) {
+                        shelves.filter { BookshelfFiltering.shelfBookIds(it.notebookIdsCsv).contains(notebook.id) }
+                    }
+
+                    if (assignedShelves.isEmpty()) {
+                        Text("Not assigned to any bookshelf yet", color = TextMuted, fontSize = 12.sp)
+                    } else {
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            assignedShelves.forEach { s ->
+                                val shelfColor = try {
+                                    Color(android.graphics.Color.parseColor(s.color))
+                                } catch (_: Exception) { IndigoAccent }
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = SurfaceSlate
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(shelfColor))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(s.title, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Access Control
             Text("Access Control & Sharing", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
 
@@ -390,5 +461,25 @@ fun ConfigureNotebookScreen(
                 Text("Save Configuration", fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
         }
+    }
+
+    if (showSetShelfDialog) {
+        SetBookToShelfDialog(
+            book = notebook,
+            shelves = shelves,
+            onToggleShelf = { shelfId -> onToggleBookShelf(notebook.id, shelfId) },
+            onCreateShelfClick = { showCreateShelfDialog = true },
+            onDismiss = { showSetShelfDialog = false }
+        )
+    }
+
+    if (showCreateShelfDialog) {
+        CreateShelfDialog(
+            onConfirm = { shelfTitle, desc, color ->
+                onCreateShelf(shelfTitle, desc, color, notebook.id)
+                showCreateShelfDialog = false
+            },
+            onDismiss = { showCreateShelfDialog = false }
+        )
     }
 }

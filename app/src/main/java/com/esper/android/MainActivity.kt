@@ -22,6 +22,7 @@ import com.esper.android.data.remote.RemoteNotebook
 import com.esper.android.data.remote.MeLimits
 import com.esper.android.ui.auth.LoginScreen
 import com.esper.android.ui.bookshelf.AllTagsScreen
+import com.esper.android.ui.bookshelf.BookshelfFiltering
 import com.esper.android.ui.bookshelf.BookshelfScreen
 import com.esper.android.ui.bookshelf.ConfigureNotebookScreen
 import com.esper.android.ui.bookshelf.CreateNotebookScreen
@@ -250,7 +251,24 @@ class MainActivity : ComponentActivity() {
                 }
                 var recentPageItems by remember { mutableStateOf<List<RecentPageItem>>(emptyList()) }
                 var currentUser by remember { mutableStateOf<FirebaseUser?>(auth.currentUser) }
-                var isOfflineMode by remember { mutableStateOf(false) }
+                val offlinePrefs = remember {
+                    getSharedPreferences("esper_offline_prefs", Context.MODE_PRIVATE)
+                }
+                var isOfflineMode by remember {
+                    mutableStateOf(offlinePrefs.getBoolean("offline_mode_active", false))
+                }
+                var forceOnline by remember { mutableStateOf(false) }
+                var isCreatingOfflineVersion by remember { mutableStateOf(false) }
+                var offlineVersionTimestamp by remember {
+                    mutableStateOf<Long?>(
+                        offlinePrefs.getLong("offline_version_timestamp", 0L).takeIf { it > 0 }
+                    )
+                }
+                var offlineVersionSummary by remember {
+                    mutableStateOf<String?>(
+                        offlinePrefs.getString("offline_version_summary", null)
+                    )
+                }
                 var lastLocalSaveTime by remember { mutableLongStateOf(0L) }
                 var isTabsSheetOpen by remember { mutableStateOf(false) }
 
@@ -259,10 +277,11 @@ class MainActivity : ComponentActivity() {
                 val currentJournalId = remember(currentUser?.uid) { journalDocIdFor(currentUser?.uid) }
 
                 // Single source of truth for connectivity-driven read-only mode:
-                // offline gateway mode OR no validated network => whole app is read-only.
+                // offline gateway mode OR no validated network (unless the user
+                // explicitly forced online) => whole app is read-only.
                 val isNetworkOnline by NetworkMonitor.observe(applicationContext)
                     .collectAsState(initial = true)
-                val isReadOnly = !isNetworkOnline || isOfflineMode
+                val isReadOnly = isOfflineMode || (!isNetworkOnline && !forceOnline)
 
                 fun persistTabsToServer(items: List<TabItemData>) {
                     if (currentUser == null) return
@@ -359,6 +378,8 @@ class MainActivity : ComponentActivity() {
                                 val user = auth.currentUser
                                 currentUser = user
                                 isOfflineMode = false
+                                forceOnline = false
+                                offlinePrefs.edit().putBoolean("offline_mode_active", false).apply()
                                 updateAuthToken(user)
                                 Toast.makeText(applicationContext, "Signed in as ${user?.displayName}", Toast.LENGTH_SHORT).show()
                             }
@@ -383,6 +404,8 @@ class MainActivity : ComponentActivity() {
                     auth.signOut()
                     currentUser = null
                     isOfflineMode = false
+                    forceOnline = false
+                    offlinePrefs.edit().putBoolean("offline_mode_active", false).apply()
                     updateAuthToken(null)
                     screenStack = listOf(ActiveScreen.BOOKSHELF)
                 }
@@ -760,20 +783,166 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                fun toggleOfflineMode(targetOffline: Boolean) {
+                    if (targetOffline) {
+                        isOfflineMode = true
+                        forceOnline = false
+                        offlinePrefs.edit().putBoolean("offline_mode_active", true).apply()
+                        Toast.makeText(
+                            applicationContext,
+                            "Switched to Offline Mode",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        isOfflineMode = false
+                        forceOnline = true
+                        offlinePrefs.edit().putBoolean("offline_mode_active", false).apply()
+                        if (isNetworkOnline) {
+                            Toast.makeText(
+                                applicationContext,
+                                "Switched to Online Mode",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            if (currentUser != null) {
+                                flushWriteQueue()
+                            }
+                        } else {
+                            Toast.makeText(
+                                applicationContext,
+                                "Switched to Online Mode (No active network detected)",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }
+
+                fun loadOfflineMode() {
+                    toggleOfflineMode(true)
+                    Toast.makeText(
+                        applicationContext,
+                        "Offline mode loaded. Using local offline data.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+
+                fun createOfflineVersion() {
+                    if (isCreatingOfflineVersion) return
+                    isCreatingOfflineVersion = true
+                    coroutineScope.launch(Dispatchers.IO) {
+                        try {
+                            if (currentUser != null && isNetworkOnline) {
+                                syncManager.sync(currentUser?.uid)
+                                val allLocalNotes = db.dao().getAllNotebooksList()
+                                var totalPagesCount = 0
+                                allLocalNotes.forEach { nb ->
+                                    try {
+                                        val remoteDetail = api.getNote(nb.id, guestTokens.get(nb.id))
+                                        syncManager.upsertRemoteNotebook(remoteDetail, currentUser?.uid)
+                                        totalPagesCount += remoteDetail.pages?.size ?: 0
+                                    } catch (_: Exception) {
+                                        val details = db.dao().getNotebookDetails(nb.id)
+                                        totalPagesCount += details?.pages?.size ?: 0
+                                    }
+                                }
+                                val ts = System.currentTimeMillis()
+                                val summary = "${allLocalNotes.size} notebooks, $totalPagesCount pages"
+                                offlinePrefs.edit()
+                                    .putLong("offline_version_timestamp", ts)
+                                    .putString("offline_version_summary", summary)
+                                    .apply()
+
+                                withContext(Dispatchers.Main) {
+                                    offlineVersionTimestamp = ts
+                                    offlineVersionSummary = summary
+                                    isCreatingOfflineVersion = false
+                                    Toast.makeText(
+                                        applicationContext,
+                                        "Offline version created: $summary cached",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            } else {
+                                val allLocalNotes = db.dao().getAllNotebooksList()
+                                var totalPagesCount = 0
+                                allLocalNotes.forEach { nb ->
+                                    val details = db.dao().getNotebookDetails(nb.id)
+                                    totalPagesCount += details?.pages?.size ?: 0
+                                }
+                                val ts = System.currentTimeMillis()
+                                val summary = "${allLocalNotes.size} notebooks, $totalPagesCount pages (local snapshot)"
+                                offlinePrefs.edit()
+                                    .putLong("offline_version_timestamp", ts)
+                                    .putString("offline_version_summary", summary)
+                                    .apply()
+
+                                withContext(Dispatchers.Main) {
+                                    offlineVersionTimestamp = ts
+                                    offlineVersionSummary = summary
+                                    isCreatingOfflineVersion = false
+                                    Toast.makeText(
+                                        applicationContext,
+                                        "Offline version created from local data: $summary",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                isCreatingOfflineVersion = false
+                                Toast.makeText(
+                                    applicationContext,
+                                    "Failed to create offline version: ${e.message}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                }
+
                 // Sync is deliberately manual. Creating an entry, saving an
                 // editor draft, pulling to refresh (bookshelf/editor) or using
                 // Settings > Sync now are the only paths that touch the server.
                 // Background pulls used to overwrite in-flight local edits.
 
-                // Reconnect only heals queued writes. It must not pull fresh
-                // server state over a note the user is still editing.
+                // Connectivity watcher: automatically activates offline mode
+                // when Wi-Fi/mobile data drops, and only heals queued writes on
+                // reconnect. It never pulls fresh server state over a note the
+                // user is still editing.
                 LaunchedEffect(Unit) {
-                    var wasOnline = true
+                    var isFirstEmission = true
                     NetworkMonitor.observe(applicationContext).collect { online ->
-                        if (online && !wasOnline && currentUser != null) {
-                            flushWriteQueue()
+                        if (isFirstEmission) {
+                            isFirstEmission = false
+                            if (!online && !forceOnline) {
+                                isOfflineMode = true
+                                offlinePrefs.edit().putBoolean("offline_mode_active", true).apply()
+                                Toast.makeText(
+                                    applicationContext,
+                                    "No internet connection. Offline mode automatically activated.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        } else {
+                            if (!online) {
+                                isOfflineMode = true
+                                forceOnline = false
+                                offlinePrefs.edit().putBoolean("offline_mode_active", true).apply()
+                                Toast.makeText(
+                                    applicationContext,
+                                    "Network disconnected. Offline mode automatically activated.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                Toast.makeText(
+                                    applicationContext,
+                                    "Network connection restored.",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                if (currentUser != null) {
+                                    flushWriteQueue()
+                                }
+                            }
                         }
-                        wasOnline = online
                     }
                 }
 
@@ -818,7 +987,11 @@ class MainActivity : ComponentActivity() {
                     currentUser == null && !isOfflineMode -> {
                         LoginScreen(
                             onSignInWithGoogle = { launchGoogleSignIn() },
-                            onContinueOffline = { isOfflineMode = true }
+                            onContinueOffline = {
+                                isOfflineMode = true
+                                forceOnline = false
+                                offlinePrefs.edit().putBoolean("offline_mode_active", true).apply()
+                            }
                         )
                     }
 
@@ -1085,7 +1258,14 @@ class MainActivity : ComponentActivity() {
                                 syncWithCloud()
                             },
                             onSignOut = { signOut() },
-                            onNavigateBack = { popScreen() }
+                            onNavigateBack = { popScreen() },
+                            isOfflineMode = isOfflineMode,
+                            onToggleOfflineMode = { toggleOfflineMode(it) },
+                            offlineVersionTimestamp = offlineVersionTimestamp,
+                            offlineVersionSummary = offlineVersionSummary,
+                            isCreatingOfflineVersion = isCreatingOfflineVersion,
+                            onCreateOfflineVersion = { createOfflineVersion() },
+                            onLoadOfflineMode = { loadOfflineMode() }
                         )
                     }
 
@@ -1155,6 +1335,72 @@ class MainActivity : ComponentActivity() {
                         key(targetBook.id) {
                             ConfigureNotebookScreen(
                                 notebook = targetBook,
+                                shelves = shelves,
+                                onToggleBookShelf = { bookId, shelfId ->
+                                    if (isReadOnly) return@ConfigureNotebookScreen
+                                    coroutineScope.launch {
+                                        val targetShelf = shelves.find { it.id == shelfId } ?: return@launch
+                                        val updatedCsv = BookshelfFiltering.toggleBookOnShelf(targetShelf.notebookIdsCsv, bookId)
+                                        val updatedIds = BookshelfFiltering.shelfBookIds(updatedCsv).toList()
+                                        val updatedShelf = targetShelf.copy(
+                                            notebookIdsCsv = updatedCsv,
+                                            updatedAt = System.currentTimeMillis()
+                                        )
+                                        db.dao().upsertShelf(updatedShelf)
+                                        launch(Dispatchers.IO) {
+                                            try {
+                                                api.updateShelf(
+                                                    targetShelf.id,
+                                                    mapOf(
+                                                        "title" to updatedShelf.title,
+                                                        "description" to updatedShelf.description,
+                                                        "color" to updatedShelf.color,
+                                                        "coverPreset" to updatedShelf.coverPreset,
+                                                        "position" to updatedShelf.position,
+                                                        "notebookIds" to updatedIds
+                                                    )
+                                                )
+                                            } catch (e: Exception) {
+                                                Log.w("EsperShelf", "Failed to update shelf on server", e)
+                                            }
+                                        }
+                                    }
+                                },
+                                onCreateShelf = { title, desc, color, initialBookId ->
+                                    if (isReadOnly) return@ConfigureNotebookScreen
+                                    coroutineScope.launch {
+                                        val newShelfId = "shelf-${UUID.randomUUID().toString().take(8)}"
+                                        val initialIds = if (initialBookId != null) listOf(initialBookId) else emptyList()
+                                        val newShelf = ShelfEntity(
+                                            id = newShelfId,
+                                            title = title,
+                                            description = desc,
+                                            color = color,
+                                            coverPreset = "midnight",
+                                            position = shelves.size,
+                                            notebookIdsCsv = initialIds.joinToString(","),
+                                            updatedAt = System.currentTimeMillis()
+                                        )
+                                        db.dao().upsertShelf(newShelf)
+                                        launch(Dispatchers.IO) {
+                                            try {
+                                                api.createShelf(
+                                                    mapOf(
+                                                        "id" to newShelfId,
+                                                        "title" to title,
+                                                        "description" to desc,
+                                                        "color" to color,
+                                                        "coverPreset" to "midnight",
+                                                        "position" to newShelf.position,
+                                                        "notebookIds" to initialIds
+                                                    )
+                                                )
+                                            } catch (e: Exception) {
+                                                Log.w("EsperShelf", "Failed to sync created shelf to server", e)
+                                            }
+                                        }
+                                    }
+                                },
                                 onSaveConfig = { title, desc, tags, preset, coverImage, visibility, password ->
                                     if (isReadOnly) return@ConfigureNotebookScreen
                                     coroutineScope.launch {
@@ -1565,6 +1811,91 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             },
+                            onCreateShelf = { title, desc, color, initialBookId ->
+                                if (isReadOnly) return@BookshelfScreen
+                                coroutineScope.launch {
+                                    tierLimits?.max_shelves?.let { max ->
+                                        if (shelves.size >= max) {
+                                            Toast.makeText(
+                                                applicationContext,
+                                                "Shelf limit reached ($max) for your plan",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                            return@launch
+                                        }
+                                    }
+                                    val newShelfId = "shelf-${UUID.randomUUID().toString().take(8)}"
+                                    val initialIds = if (initialBookId != null) listOf(initialBookId) else emptyList()
+                                    val newShelf = ShelfEntity(
+                                        id = newShelfId,
+                                        title = title,
+                                        description = desc,
+                                        color = color,
+                                        coverPreset = "midnight",
+                                        position = shelves.size,
+                                        notebookIdsCsv = initialIds.joinToString(","),
+                                        updatedAt = System.currentTimeMillis()
+                                    )
+                                    db.dao().upsertShelf(newShelf)
+                                    launch(Dispatchers.IO) {
+                                        try {
+                                            api.createShelf(
+                                                mapOf(
+                                                    "id" to newShelfId,
+                                                    "title" to title,
+                                                    "description" to desc,
+                                                    "color" to color,
+                                                    "coverPreset" to "midnight",
+                                                    "position" to newShelf.position,
+                                                    "notebookIds" to initialIds
+                                                )
+                                            )
+                                        } catch (e: Exception) {
+                                            Log.w("EsperShelf", "Failed to sync created shelf to server", e)
+                                        }
+                                    }
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(applicationContext, "Bookshelf \"$title\" created", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            onToggleBookShelf = { bookId, shelfId ->
+                                if (isReadOnly) return@BookshelfScreen
+                                coroutineScope.launch {
+                                    val targetShelf = shelves.find { it.id == shelfId } ?: return@launch
+                                    val updatedCsv = BookshelfFiltering.toggleBookOnShelf(targetShelf.notebookIdsCsv, bookId)
+                                    val updatedIds = BookshelfFiltering.shelfBookIds(updatedCsv).toList()
+                                    val willAdd = updatedIds.contains(bookId)
+                                    val updatedShelf = targetShelf.copy(
+                                        notebookIdsCsv = updatedCsv,
+                                        updatedAt = System.currentTimeMillis()
+                                    )
+                                    db.dao().upsertShelf(updatedShelf)
+                                    launch(Dispatchers.IO) {
+                                        try {
+                                            api.updateShelf(
+                                                targetShelf.id,
+                                                mapOf(
+                                                    "title" to updatedShelf.title,
+                                                    "description" to updatedShelf.description,
+                                                    "color" to updatedShelf.color,
+                                                    "coverPreset" to updatedShelf.coverPreset,
+                                                    "position" to updatedShelf.position,
+                                                    "notebookIds" to updatedIds
+                                                )
+                                            )
+                                        } catch (e: Exception) {
+                                            Log.w("EsperShelf", "Failed to update shelf on server", e)
+                                        }
+                                    }
+                                    withContext(Dispatchers.Main) {
+                                        val msg = if (willAdd) "Added to \"${targetShelf.title}\"" else "Removed from \"${targetShelf.title}\""
+                                        Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            isOfflineMode = isOfflineMode,
+                            onToggleOfflineMode = { toggleOfflineMode(it) },
                             onSyncWithRemote = { syncWithCloud() }
                         )
                     }

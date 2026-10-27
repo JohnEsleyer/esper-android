@@ -78,6 +78,10 @@ fun BookshelfScreen(
     onOpenCreateNotebookScreen: () -> Unit,
     onOpenJournalScreen: () -> Unit,
     onDeleteShelf: (String) -> Unit,
+    onCreateShelf: (title: String, description: String, color: String, initialBookId: String?) -> Unit = { _, _, _, _ -> },
+    onToggleBookShelf: (bookId: String, shelfId: String) -> Unit = { _, _ -> },
+    isOfflineMode: Boolean = false,
+    onToggleOfflineMode: (Boolean) -> Unit = {},
     onSyncWithRemote: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -89,6 +93,9 @@ fun BookshelfScreen(
     var isRefreshing by remember { mutableStateOf(false) }
     var bookToDelete by remember { mutableStateOf<NotebookEntity?>(null) }
     var shelfToDelete by remember { mutableStateOf<ShelfEntity?>(null) }
+    var bookToSetShelf by remember { mutableStateOf<NotebookEntity?>(null) }
+    var showCreateShelfDialog by remember { mutableStateOf(false) }
+    var createShelfInitialBookId by remember { mutableStateOf<String?>(null) }
     var currentSort by remember { mutableStateOf(BookSortOption.RECENTLY_UPDATED) }
     var sortDropdownExpanded by remember { mutableStateOf(false) }
 
@@ -221,13 +228,84 @@ fun BookshelfScreen(
                     HorizontalDivider(color = BorderSlate, thickness = 1.dp)
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    Text(
-                        text = "Shelves & Collections (${shelves.size})",
-                        color = IndigoGlow,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isOfflineMode) Color(0xFF332005) else SurfaceSlate.copy(alpha = 0.5f),
+                        border = BorderStroke(1.dp, if (isOfflineMode) AmberGlow.copy(alpha = 0.5f) else BorderSlate),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    if (isOfflineMode) Icons.Default.CloudOff else Icons.Default.CloudQueue,
+                                    contentDescription = null,
+                                    tint = if (isOfflineMode) AmberGlow else IndigoGlow,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = if (isOfflineMode) "Offline Mode" else "Online Mode",
+                                        color = TextPrimary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = if (isOfflineMode) "Working with local data" else "Cloud sync enabled",
+                                        color = TextMuted,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = isOfflineMode,
+                                onCheckedChange = onToggleOfflineMode,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = AmberGlow,
+                                    checkedTrackColor = AmberGlow.copy(alpha = 0.35f),
+                                    uncheckedThumbColor = IndigoAccent,
+                                    uncheckedTrackColor = SurfaceSlate
+                                )
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Shelves & Collections (${shelves.size})",
+                            color = IndigoGlow,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        if (!isReadOnly) {
+                            IconButton(
+                                onClick = {
+                                    createShelfInitialBookId = null
+                                    showCreateShelfDialog = true
+                                },
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = "Create Bookshelf",
+                                    tint = IndigoAccent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
 
                     LazyColumn(
                         modifier = Modifier.weight(1f),
@@ -252,6 +330,33 @@ fun BookshelfScreen(
                                     Icon(Icons.Default.Folder, contentDescription = null, tint = IndigoGlow, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Text("All Notebooks", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+
+                        if (shelves.isEmpty()) {
+                            item {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = Color.Transparent,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Text("No bookshelves yet", color = TextMuted, fontSize = 12.sp)
+                                        if (!isReadOnly) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "+ Create a bookshelf",
+                                                color = IndigoGlow,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                modifier = Modifier.clickable {
+                                                    createShelfInitialBookId = null
+                                                    showCreateShelfDialog = true
+                                                }
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -330,8 +435,15 @@ fun BookshelfScreen(
         Scaffold(
             topBar = {
                 Column {
-                    if (isReadOnly) {
-                        OfflineNoticeBanner()
+                    if (isReadOnly || isOfflineMode) {
+                        OfflineNoticeBanner(
+                            message = if (isOfflineMode) {
+                                "Offline Mode Active — Using local offline data."
+                            } else {
+                                "Network Offline — Working with local data."
+                            },
+                            onToggleOnline = { onToggleOfflineMode(false) }
+                        )
                     }
                     TopAppBar(
                     title = {
@@ -532,6 +644,21 @@ fun BookshelfScreen(
                                 )
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (currentShelf != null && !isReadOnly) {
+                                    IconButton(
+                                        onClick = { shelfToDelete = currentShelf },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = "Delete Bookshelf",
+                                            tint = RoseRuby,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                }
+
                                 if (selectedShelfId != null || selectedTagFilter != "All" || searchQuery.isNotEmpty()) {
                                     TextButton(
                                         onClick = {
@@ -631,7 +758,8 @@ fun BookshelfScreen(
                                     notebook = book,
                                     onClick = { onOpenNotebook(book.id) },
                                     onEdit = { onConfigureNotebook(book) },
-                                    onDelete = { bookToDelete = book }
+                                    onDelete = { bookToDelete = book },
+                                    onSetShelf = { bookToSetShelf = book }
                                 )
                             }
                         }
@@ -654,13 +782,43 @@ fun BookshelfScreen(
 
         shelfToDelete?.let { shelf ->
             ConfirmDeleteDialog(
-                title = "Delete Shelf",
-                message = "Are you sure you want to delete shelf \u201C${shelf.title}\u201D? Books on this shelf will not be deleted.",
+                title = "Delete Bookshelf",
+                message = "Are you sure you want to delete bookshelf \u201C${shelf.title}\u201D? Books on this shelf will not be deleted.",
                 onConfirm = {
+                    if (selectedShelfId == shelf.id) {
+                        selectedShelfId = null
+                    }
                     onDeleteShelf(shelf.id)
                     shelfToDelete = null
                 },
                 onDismiss = { shelfToDelete = null }
+            )
+        }
+
+        bookToSetShelf?.let { book ->
+            SetBookToShelfDialog(
+                book = book,
+                shelves = shelves,
+                onToggleShelf = { shelfId -> onToggleBookShelf(book.id, shelfId) },
+                onCreateShelfClick = {
+                    createShelfInitialBookId = book.id
+                    showCreateShelfDialog = true
+                },
+                onDismiss = { bookToSetShelf = null }
+            )
+        }
+
+        if (showCreateShelfDialog) {
+            CreateShelfDialog(
+                onConfirm = { title, desc, color ->
+                    onCreateShelf(title, desc, color, createShelfInitialBookId)
+                    showCreateShelfDialog = false
+                    createShelfInitialBookId = null
+                },
+                onDismiss = {
+                    showCreateShelfDialog = false
+                    createShelfInitialBookId = null
+                }
             )
         }
     }

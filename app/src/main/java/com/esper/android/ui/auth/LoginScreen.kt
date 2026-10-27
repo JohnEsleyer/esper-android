@@ -167,7 +167,7 @@ fun LoginScreen(
                             Icon(Icons.Default.CloudOff, contentDescription = null, tint = IndigoGlow, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Continue in Offline Mode",
+                                text = "Load Offline Mode",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold
                             )

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
@@ -29,7 +30,8 @@ fun BookCard(
     notebook: NotebookEntity,
     onClick: () -> Unit,
     onEdit: () -> Unit = {},
-    onDelete: () -> Unit = {}
+    onDelete: () -> Unit = {},
+    onSetShelf: () -> Unit = {}
 ) {
     val isReadOnly = LocalReadOnlyMode.current
     val theme = remember(notebook.coverPreset, notebook.coverImage) {
@@ -113,6 +115,23 @@ fun BookCard(
 
                     if (!isReadOnly) {
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = Color.Black.copy(alpha = 0.5f)
+                            ) {
+                                IconButton(
+                                    onClick = onSetShelf,
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Folder,
+                                        contentDescription = "Set Bookshelf",
+                                        tint = Color.White.copy(alpha = 0.85f),
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
+                            }
+
                             Surface(
                                 shape = RoundedCornerShape(14.dp),
                                 color = Color.Black.copy(alpha = 0.5f)
