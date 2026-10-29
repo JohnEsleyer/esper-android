@@ -10,29 +10,17 @@ class OfflineModeTest {
     fun `isReadOnly is true when in offline mode regardless of network`() {
         val isNetworkOnline = true
         val isOfflineMode = true
-        val forceOnline = false
 
-        val isReadOnly = isOfflineMode || (!isNetworkOnline && !forceOnline)
+        val isReadOnly = isOfflineMode
         assertTrue(isReadOnly)
     }
 
     @Test
-    fun `isReadOnly is true when network is disconnected without force online`() {
+    fun `isReadOnly is false when network is disconnected if offline mode is not enabled in settings`() {
         val isNetworkOnline = false
         val isOfflineMode = false
-        val forceOnline = false
 
-        val isReadOnly = isOfflineMode || (!isNetworkOnline && !forceOnline)
-        assertTrue(isReadOnly)
-    }
-
-    @Test
-    fun `force online overrides disconnected network`() {
-        val isNetworkOnline = false
-        val isOfflineMode = false
-        val forceOnline = true
-
-        val isReadOnly = isOfflineMode || (!isNetworkOnline && !forceOnline)
+        val isReadOnly = isOfflineMode
         assertFalse(isReadOnly)
     }
 
@@ -40,9 +28,8 @@ class OfflineModeTest {
     fun `both online and not in offline mode gives full read-write access`() {
         val isNetworkOnline = true
         val isOfflineMode = false
-        val forceOnline = false
 
-        val isReadOnly = isOfflineMode || (!isNetworkOnline && !forceOnline)
+        val isReadOnly = isOfflineMode
         assertFalse(isReadOnly)
     }
 }

@@ -257,7 +257,6 @@ class MainActivity : ComponentActivity() {
                 var isOfflineMode by remember {
                     mutableStateOf(offlinePrefs.getBoolean("offline_mode_active", false))
                 }
-                var forceOnline by remember { mutableStateOf(false) }
                 var isCreatingOfflineVersion by remember { mutableStateOf(false) }
                 var offlineVersionTimestamp by remember {
                     mutableStateOf<Long?>(
@@ -276,12 +275,11 @@ class MainActivity : ComponentActivity() {
                 // when signed in; the legacy shared id in offline/guest mode.
                 val currentJournalId = remember(currentUser?.uid) { journalDocIdFor(currentUser?.uid) }
 
-                // Single source of truth for connectivity-driven read-only mode:
-                // offline gateway mode OR no validated network (unless the user
-                // explicitly forced online) => whole app is read-only.
+                // Single source of truth for read-only mode:
+                // only active when the user explicitly enabled offline mode in settings.
                 val isNetworkOnline by NetworkMonitor.observe(applicationContext)
                     .collectAsState(initial = true)
-                val isReadOnly = isOfflineMode || (!isNetworkOnline && !forceOnline)
+                val isReadOnly = isOfflineMode
 
                 fun persistTabsToServer(items: List<TabItemData>) {
                     if (currentUser == null) return
@@ -378,7 +376,6 @@ class MainActivity : ComponentActivity() {
                                 val user = auth.currentUser
                                 currentUser = user
                                 isOfflineMode = false
-                                forceOnline = false
                                 offlinePrefs.edit().putBoolean("offline_mode_active", false).apply()
                                 updateAuthToken(user)
                                 Toast.makeText(applicationContext, "Signed in as ${user?.displayName}", Toast.LENGTH_SHORT).show()
@@ -404,7 +401,6 @@ class MainActivity : ComponentActivity() {
                     auth.signOut()
                     currentUser = null
                     isOfflineMode = false
-                    forceOnline = false
                     offlinePrefs.edit().putBoolean("offline_mode_active", false).apply()
                     updateAuthToken(null)
                     screenStack = listOf(ActiveScreen.BOOKSHELF)
@@ -786,7 +782,6 @@ class MainActivity : ComponentActivity() {
                 fun toggleOfflineMode(targetOffline: Boolean) {
                     if (targetOffline) {
                         isOfflineMode = true
-                        forceOnline = false
                         offlinePrefs.edit().putBoolean("offline_mode_active", true).apply()
                         Toast.makeText(
                             applicationContext,
@@ -795,7 +790,6 @@ class MainActivity : ComponentActivity() {
                         ).show()
                     } else {
                         isOfflineMode = false
-                        forceOnline = true
                         offlinePrefs.edit().putBoolean("offline_mode_active", false).apply()
                         if (isNetworkOnline) {
                             Toast.makeText(
@@ -904,33 +898,20 @@ class MainActivity : ComponentActivity() {
                 // Settings > Sync now are the only paths that touch the server.
                 // Background pulls used to overwrite in-flight local edits.
 
-                // Connectivity watcher: automatically activates offline mode
-                // when Wi-Fi/mobile data drops, and only heals queued writes on
-                // reconnect. It never pulls fresh server state over a note the
-                // user is still editing.
+                // Connectivity watcher: monitors network state and flushes
+                // queued offline writes when connection is restored.
+                // Does NOT automatically switch the user into offline mode.
                 LaunchedEffect(Unit) {
                     var isFirstEmission = true
                     NetworkMonitor.observe(applicationContext).collect { online ->
                         if (isFirstEmission) {
                             isFirstEmission = false
-                            if (!online && !forceOnline) {
-                                isOfflineMode = true
-                                offlinePrefs.edit().putBoolean("offline_mode_active", true).apply()
-                                Toast.makeText(
-                                    applicationContext,
-                                    "No internet connection. Offline mode automatically activated.",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
                         } else {
                             if (!online) {
-                                isOfflineMode = true
-                                forceOnline = false
-                                offlinePrefs.edit().putBoolean("offline_mode_active", true).apply()
                                 Toast.makeText(
                                     applicationContext,
-                                    "Network disconnected. Offline mode automatically activated.",
-                                    Toast.LENGTH_LONG
+                                    "Network disconnected.",
+                                    Toast.LENGTH_SHORT
                                 ).show()
                             } else {
                                 Toast.makeText(
@@ -989,7 +970,6 @@ class MainActivity : ComponentActivity() {
                             onSignInWithGoogle = { launchGoogleSignIn() },
                             onContinueOffline = {
                                 isOfflineMode = true
-                                forceOnline = false
                                 offlinePrefs.edit().putBoolean("offline_mode_active", true).apply()
                             }
                         )

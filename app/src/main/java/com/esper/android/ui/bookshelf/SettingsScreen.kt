@@ -79,13 +79,9 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             Column {
-                if (isReadOnly || isOfflineMode) {
+                if (isOfflineMode) {
                     OfflineNoticeBanner(
-                        message = if (isOfflineMode) {
-                            "Offline Mode Active — Using local offline data."
-                        } else {
-                            "Network Offline — Working with local data."
-                        },
+                        message = "Offline Mode Active — Using local offline data.",
                         onToggleOnline = { onToggleOfflineMode(false) }
                     )
                 }
