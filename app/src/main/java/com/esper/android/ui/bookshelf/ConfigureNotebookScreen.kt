@@ -16,6 +16,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
@@ -71,7 +73,8 @@ fun ConfigureNotebookScreen(
         coverPreset: String,
         coverImage: String?,
         visibility: String,
-        password: String?
+        password: String?,
+        isPinned: Boolean
     ) -> Unit,
     onNavigateBack: () -> Unit
 ) {
@@ -86,6 +89,7 @@ fun ConfigureNotebookScreen(
     var coverImageInput by remember { mutableStateOf(notebook.coverImage ?: "") }
     var visibility by remember { mutableStateOf(notebook.visibility) }
     var passwordInput by remember { mutableStateOf("") }
+    var isBookmarked by remember { mutableStateOf(notebook.isPinned) }
     var isCopiedPrompt by remember { mutableStateOf(false) }
 
     var showSetShelfDialog by remember { mutableStateOf(false) }
@@ -129,7 +133,8 @@ fun ConfigureNotebookScreen(
                                     coverPreset,
                                     sanitizedCover,
                                     visibility,
-                                    passwordInput.trim().ifEmpty { null }
+                                    passwordInput.trim().ifEmpty { null },
+                                    isBookmarked
                                 )
                                 onNavigateBack()
                             }
@@ -331,9 +336,22 @@ fun ConfigureNotebookScreen(
             }
 
             // Access Control
-            Text("Access Control & Sharing", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("Access Control & Bookmark", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = isBookmarked,
+                    onClick = { isBookmarked = !isBookmarked },
+                    label = { Text(if (isBookmarked) "Bookmarked" else "Bookmark") },
+                    leadingIcon = {
+                        Icon(
+                            if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                            contentDescription = null,
+                            tint = if (isBookmarked) AmberGlow else TextSecondary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                )
                 FilterChip(
                     selected = visibility == "public",
                     onClick = { visibility = "public" },
@@ -437,7 +455,7 @@ fun ConfigureNotebookScreen(
             Spacer(modifier = Modifier.height(10.dp))
 
             // Save button
-            Button(
+             Button(
                 onClick = {
                     if (title.isNotBlank()) {
                         onSaveConfig(
@@ -447,7 +465,8 @@ fun ConfigureNotebookScreen(
                             coverPreset,
                             sanitizedCover,
                             visibility,
-                            passwordInput.trim().ifEmpty { null }
+                            passwordInput.trim().ifEmpty { null },
+                            isBookmarked
                         )
                         onNavigateBack()
                     }

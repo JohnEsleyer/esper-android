@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -151,6 +152,8 @@ fun SetBookToShelfDialog(
     onCreateShelfClick: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val listState = rememberLazyListState()
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -211,67 +214,113 @@ fun SetBookToShelfDialog(
                         }
                     }
                 } else {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f, fill = false),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .fillMaxWidth()
                     ) {
-                        items(shelves, key = { it.id }) { shelf ->
-                            val isAssigned = BookshelfFiltering.shelfBookIds(shelf.notebookIdsCsv).contains(book.id)
-                            val shelfColor = try {
-                                Color(android.graphics.Color.parseColor(shelf.color))
-                            } catch (_: Exception) { IndigoAccent }
-                            val bookCount = BookshelfFiltering.shelfBookIds(shelf.notebookIdsCsv).size
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(end = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(shelves, key = { it.id }) { shelf ->
+                                val isAssigned = BookshelfFiltering.shelfBookIds(shelf.notebookIdsCsv).contains(book.id)
+                                val shelfColor = try {
+                                    Color(android.graphics.Color.parseColor(shelf.color))
+                                } catch (_: Exception) { IndigoAccent }
+                                val bookCount = BookshelfFiltering.shelfBookIds(shelf.notebookIdsCsv).size
 
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (isAssigned) SurfaceSlate else Color.Transparent,
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (isAssigned) IndigoGlow.copy(alpha = 0.5f) else BorderSlate.copy(alpha = 0.4f)
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onToggleShelf(shelf.id) }
-                            ) {
-                                Row(
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isAssigned) SurfaceSlate else Color.Transparent,
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isAssigned) IndigoGlow.copy(alpha = 0.5f) else BorderSlate.copy(alpha = 0.4f)
+                                    ),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .clickable { onToggleShelf(shelf.id) }
                                 ) {
                                     Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(12.dp)
-                                                .clip(CircleShape)
-                                                .background(shelfColor)
-                                        )
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Column {
-                                            Text(
-                                                text = shelf.title,
-                                                color = TextPrimary,
-                                                fontWeight = FontWeight.SemiBold,
-                                                fontSize = 13.sp
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(12.dp)
+                                                    .clip(CircleShape)
+                                                    .background(shelfColor)
                                             )
-                                            Text(
-                                                text = "$bookCount ${if (bookCount == 1) "book" else "books"}",
-                                                color = TextMuted,
-                                                fontSize = 10.sp
-                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Column {
+                                                Text(
+                                                    text = shelf.title,
+                                                    color = TextPrimary,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontSize = 13.sp
+                                                )
+                                                Text(
+                                                    text = "$bookCount ${if (bookCount == 1) "book" else "books"}",
+                                                    color = TextMuted,
+                                                    fontSize = 10.sp
+                                                )
+                                            }
                                         }
-                                    }
-                                    Checkbox(
-                                        checked = isAssigned,
-                                        onCheckedChange = { onToggleShelf(shelf.id) },
-                                        colors = CheckboxDefaults.colors(
-                                            checkedColor = IndigoAccent,
-                                            uncheckedColor = TextMuted
+                                        Checkbox(
+                                            checked = isAssigned,
+                                            onCheckedChange = { onToggleShelf(shelf.id) },
+                                            colors = CheckboxDefaults.colors(
+                                                checkedColor = IndigoAccent,
+                                                uncheckedColor = TextMuted
+                                            )
                                         )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Prominent, clearly visible vertical scrollbar indicator
+                        val totalItems = listState.layoutInfo.totalItemsCount
+                        val visibleItems = listState.layoutInfo.visibleItemsInfo.size
+                        val isScrollable = totalItems > visibleItems && visibleItems > 0
+
+                        if (isScrollable) {
+                            val firstVisible = listState.firstVisibleItemIndex
+                            val scrollableRange = (totalItems - visibleItems).coerceAtLeast(1)
+                            val progress = (firstVisible.toFloat() / scrollableRange.toFloat()).coerceIn(0f, 1f)
+
+                             Box(
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .fillMaxHeight()
+                                    .width(5.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(BorderSlate.copy(alpha = 0.45f))
+                            ) {
+                                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                                    val trackHeight = maxHeight
+                                    val rawThumbHeight = trackHeight * (visibleItems.toFloat() / totalItems.toFloat())
+                                    val thumbHeight = if (rawThumbHeight < 28.dp) 28.dp else if (rawThumbHeight > trackHeight) trackHeight else rawThumbHeight
+                                    val availableOffset = trackHeight - thumbHeight
+                                    val thumbOffset = availableOffset * progress
+
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(top = thumbOffset)
+                                            .fillMaxWidth()
+                                            .height(thumbHeight)
+                                            .clip(RoundedCornerShape(3.dp))
+                                            .background(IndigoGlow)
                                     )
                                 }
                             }

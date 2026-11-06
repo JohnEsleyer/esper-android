@@ -119,6 +119,18 @@ class SyncManager(
             if (ts in 1..999_999_999_999L) ts * 1000 else ts
         } ?: existing?.createdAt ?: System.currentTimeMillis()
 
+        val remoteUpdatedAt = r.updatedAt?.let { ts ->
+            if (ts in 1..999_999_999_999L) ts * 1000 else ts
+        } ?: existing?.updatedAt ?: System.currentTimeMillis()
+
+        val resolvedNotesUpdatedAt = if (existing != null && existing.notesUpdatedAt > remoteUpdatedAt){
+            existing.notesUpdatedAt
+        } else if (existing != null && existing.notesUpdatedAt > 0L){
+            maxOf(existing.notesUpdatedAt, remoteUpdatedAt)
+        }else {
+            remoteUpdatedAt
+        }
+
         db.dao().upsertNotebook(
             NotebookEntity(
                 id = r.id,
@@ -126,14 +138,16 @@ class SyncManager(
                 description = r.description ?: "",
                 ownerSub = ownerSub ?: "*",
                 visibility = r.visibility ?: "public",
-                isPinned = r.isPinned ?: false,
+                isPinned = r.isPinned ?: existing?.isPinned ?: false,
                 tagsCsv = r.tags?.joinToString(",") ?: "",
                 coverPreset = r.coverPreset ?: "celestial",
                 coverImage = r.coverImage,
                 createdAt = remoteCreatedAt,
-                updatedAt = System.currentTimeMillis()
+                updatedAt = remoteUpdatedAt,
+                notesUpdatedAt = resolvedNotesUpdatedAt
             )
         )
+        
         // Purge local pages for this notebook that no longer exist on the server
         val remotePageIds = r.pages?.map { it.id }?.toSet() ?: emptySet()
         val localPages = db.dao().getPagesForNotebook(r.id)

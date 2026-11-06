@@ -5,9 +5,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,7 +32,8 @@ fun BookCard(
     onClick: () -> Unit,
     onEdit: () -> Unit = {},
     onDelete: () -> Unit = {},
-    onSetShelf: () -> Unit = {}
+    onSetShelf: () -> Unit = {},
+    onToggleBookmark: () -> Unit = {}
 ) {
     val isReadOnly = LocalReadOnlyMode.current
     val theme = remember(notebook.coverPreset, notebook.coverImage) {
@@ -84,7 +86,6 @@ fun BookCard(
                         .align(Alignment.CenterStart)
                 )
 
-
                 // Top action icons
                 Row(
                     modifier = Modifier
@@ -94,23 +95,23 @@ fun BookCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (notebook.isPinned) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = Color.Black.copy(alpha = 0.6f),
-                            modifier = Modifier.padding(4.dp)
+                    // Quick bookmark toggle button
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (notebook.isPinned) Color.Black.copy(alpha = 0.7f) else Color.Black.copy(alpha = 0.45f)
+                    ) {
+                        IconButton(
+                            onClick = onToggleBookmark,
+                            enabled = !isReadOnly,
+                            modifier = Modifier.size(28.dp)
                         ) {
                             Icon(
-                                Icons.Default.Star,
-                                contentDescription = "Pinned",
-                                tint = AmberGlow,
-                                modifier = Modifier
-                                    .padding(3.dp)
-                                    .size(15.dp)
+                                imageVector = if (notebook.isPinned) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                contentDescription = if (notebook.isPinned) "Remove Bookmark" else "Bookmark",
+                                tint = if (notebook.isPinned) AmberGlow else Color.White.copy(alpha = 0.85f),
+                                modifier = Modifier.size(16.dp)
                             )
                         }
-                    } else {
-                        Spacer(modifier = Modifier.size(18.dp))
                     }
 
                     if (!isReadOnly) {
@@ -169,10 +170,6 @@ fun BookCard(
                     }
                 }
 
-                // Render the centered title only when there is no cover artwork
-                // (matches the web contract). When artwork exists it is drawn
-                // over the gradient straight away, so a recycled grid item never
-                // flashes the title on top of the cover.
                 if (coverModel == null) {
                     Text(
                         text = notebook.title,

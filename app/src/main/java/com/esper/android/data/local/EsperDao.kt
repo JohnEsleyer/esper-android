@@ -16,11 +16,11 @@ data class NotebookWithDetails(
 
 @Dao
 interface EsperDao {
-    @Query("SELECT * FROM notebooks ORDER BY isPinned DESC, updatedAt DESC")
+    @Query("SELECT * FROM notebooks ORDER BY createdAt DESC")
     fun observeAllNotebooks(): Flow<List<NotebookEntity>>
 
     @Transaction
-    @Query("SELECT * FROM notebooks ORDER BY isPinned DESC, updatedAt DESC")
+    @Query("SELECT * FROM notebooks ORDER BY createdAt DESC")
     fun observeAllNotebooksWithDetails(): Flow<List<NotebookWithDetails>>
 
     @Transaction
@@ -84,6 +84,12 @@ interface EsperDao {
 
     @Query("UPDATE notebooks SET updatedAt = :updatedAt WHERE id = :notebookId")
     suspend fun updateNotebookUpdatedAt(notebookId: String, updatedAt: Long)
+
+    @Query("UPDATE notebooks SET notesUpdatedAt = :notesUpdatedAt, updatedAt = :updatedAt WHERE id = :notebookId")
+    suspend fun updateNotebookNotesUpdatedAt(notebookId: String, notesUpdatedAt: Long, updatedAt: Long = notesUpdatedAt)
+
+    @Query("UPDATE notebooks SET isPinned = :isPinned WHERE id = :notebookId")
+    suspend fun updateNotebookPinned(notebookId: String, isPinned: Boolean)
 
     @Query("UPDATE pages SET title = :title WHERE notebookId = :notebookId AND id = :pageId")
     suspend fun updatePageTitle(notebookId: String, pageId: String, title: String)

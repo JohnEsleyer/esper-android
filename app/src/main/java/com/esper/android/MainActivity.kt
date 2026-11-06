@@ -1007,7 +1007,7 @@ class MainActivity : ComponentActivity() {
                                 lastLocalSaveTime = System.currentTimeMillis()
                                 val derivedTitle = deriveChapterTitle(text)
                                 db.dao().updatePageNotesAndTitle(currentJournalId, pageId, text, derivedTitle)
-                                db.dao().updateNotebookUpdatedAt(currentJournalId, System.currentTimeMillis())
+                                db.dao().updateNotebookNotesUpdatedAt(currentJournalId, System.currentTimeMillis())
                                 val journalOp = SyncOp.PatchPage(currentJournalId, pageId)
                                 writeQueue.markDirty(journalOp)
                                 withContext(Dispatchers.IO) {
@@ -1381,7 +1381,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 },
-                                onSaveConfig = { title, desc, tags, preset, coverImage, visibility, password ->
+                                                                onSaveConfig = { title, desc, tags, preset, coverImage, visibility, password, isBookmarked ->
                                     if (isReadOnly) return@ConfigureNotebookScreen
                                     coroutineScope.launch {
                                         val updated = targetBook.copy(
@@ -1391,6 +1391,7 @@ class MainActivity : ComponentActivity() {
                                             coverPreset = preset,
                                             coverImage = coverImage,
                                             visibility = visibility,
+                                            isPinned = isBookmarked,
                                             updatedAt = System.currentTimeMillis()
                                         )
                                         db.dao().upsertNotebook(updated)
@@ -1583,12 +1584,11 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onSaveNotes = { pageId, text ->
-                                    lastLocalSaveTime = System.currentTimeMillis()
-                                    // Parity with web extractFirstLineTitle: keep sidebar
-                                    // title in sync with the first markdown line.
+                                    val now = System.currentTimeMillis()
+                                    lastLocalSaveTime = now
                                     val derivedTitle = deriveChapterTitle(text)
                                     db.dao().updatePageNotesAndTitle(book.notebook.id, pageId, text, derivedTitle)
-                                    db.dao().updateNotebookUpdatedAt(book.notebook.id, System.currentTimeMillis())
+                                    db.dao().updateNotebookNotesUpdatedAt(book.notebook.id, now)
                                     val patchOp = SyncOp.PatchPage(book.notebook.id, pageId)
                                     writeQueue.markDirty(patchOp)
                                     withContext(Dispatchers.IO) {
@@ -1745,7 +1745,7 @@ class MainActivity : ComponentActivity() {
                                 configuringNotebook = book
                                 navigateTo(ActiveScreen.CONFIGURE_NOTEBOOK)
                             },
-                            onDeleteNotebook = { id ->
+                             onDeleteNotebook = { id ->
                                 if (isReadOnly) return@BookshelfScreen
                                 coroutineScope.launch {
                                     db.dao().deleteNotebookCascade(id)
@@ -1764,6 +1764,26 @@ class MainActivity : ComponentActivity() {
                                             api.deleteNote(id)
                                             writeQueue.markClean(delBookOp)
                                         } catch (_: Exception) {}
+                                    }
+                                }
+                            },
+                            onToggleBookmark = { bookId ->
+                                if (isReadOnly) return@BookshelfScreen
+                                coroutineScope.launch {
+                                    val target = notebooks.find { it.id == bookId } ?: return@launch
+                                    val newPinned = !target.isPinned
+                                    val updated = target.copy(isPinned = newPinned)
+                                    db.dao().upsertNotebook(updated)
+                                    openTabItems = openTabItems.map { if (it.notebook.id == bookId) it.copy(notebook = updated) else it }
+                                    recentPageItems = recentPageItems.map { if (it.notebook.id == bookId) it.copy(notebook = updated) else it }
+                                    val msg = if (newPinned) "Bookmarked \u201C${target.title}\u201D" else "Removed bookmark"
+                                    Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()
+                                    launch(Dispatchers.IO) {
+                                        try {
+                                            api.updateNote(bookId, mapOf("isPinned" to newPinned))
+                                        } catch (e: Exception) {
+                                            Log.w("EsperBookmark", "Failed to sync bookmark to server", e)
+                                        }
                                     }
                                 }
                             },

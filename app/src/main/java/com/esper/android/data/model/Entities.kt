@@ -14,16 +14,16 @@ data class NotebookEntity(
     val isPinned: Boolean = false,
     val tagsCsv: String = "",
     // Creation timestamp (epoch millis) used by the "Recently Created" sort.
-    // Server rows are backfilled from created_at; legacy local rows from
-    // updatedAt by MIGRATION_4_5.
     @ColumnInfo(defaultValue = "0") val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    // Timestamp (epoch millis) of the most recent update to notes content.
+    // Kept separate from updatedAt so configuring metadata (title, cover, etc.)
+    // does not alter the "Recently Updated" notes sort order.
+    @ColumnInfo(defaultValue = "0") val notesUpdatedAt: Long = 0L
 )
 
 @Entity(
     tableName = "pages",
-    // Page ids are only unique within a notebook (every web-created book
-    // starts with a page called "p1"), so the key must be composite.
     primaryKeys = ["notebookId", "id"],
     foreignKeys = [
         ForeignKey(
@@ -36,10 +36,6 @@ data class NotebookEntity(
     indices = [Index("notebookId"), Index("position")]
 )
 data class PageEntity(
-    // The page id is only unique *within* a notebook: every book created on
-    // the web starts with a page called "p1". A single-column primary key made
-    // Room replace the previous book's row, so all but one of those books lost
-    // their only chapter. The key is therefore (notebookId, id).
     val id: String,
     val notebookId: String,
     val parentId: String? = null,

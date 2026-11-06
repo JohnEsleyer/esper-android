@@ -1,5 +1,7 @@
+
 package com.esper.android.ui.bookshelf
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -13,11 +15,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
-import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
@@ -30,9 +29,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.esper.android.data.local.NotebookWithDetails
@@ -48,13 +44,12 @@ import com.esper.android.ui.theme.*
 import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.ceil
 
 enum class BookSortOption(val label: String) {
-    RECENTLY_UPDATED("Recently Updated"),
-    OLDEST_UPDATED("Oldest Updated"),
     RECENTLY_CREATED("Recently Created"),
     OLDEST_CREATED("Oldest Created"),
+    RECENTLY_UPDATED("Recently Updated"),
+    OLDEST_UPDATED("Oldest Updated"),
     TITLE_AZ("Title (A-Z)"),
     TITLE_ZA("Title (Z-A)")
 }
@@ -72,6 +67,7 @@ fun BookshelfScreen(
     onOpenNotebook: (String) -> Unit,
     onConfigureNotebook: (NotebookEntity) -> Unit = {},
     onDeleteNotebook: (String) -> Unit,
+    onToggleBookmark: (String) -> Unit = {},
     onOpenAllTagsScreen: () -> Unit,
     onOpenTabsScreen: () -> Unit,
     onOpenSettingsScreen: () -> Unit,
@@ -96,29 +92,25 @@ fun BookshelfScreen(
     var bookToSetShelf by remember { mutableStateOf<NotebookEntity?>(null) }
     var showCreateShelfDialog by remember { mutableStateOf(false) }
     var createShelfInitialBookId by remember { mutableStateOf<String?>(null) }
-    var currentSort by remember { mutableStateOf(BookSortOption.RECENTLY_UPDATED) }
+    var currentSort by remember { mutableStateOf(BookSortOption.RECENTLY_CREATED) }
     var sortDropdownExpanded by remember { mutableStateOf(false) }
 
     val sortedNotebooks = remember(notebooks, currentSort) {
         val nonJournal = notebooks.filter { !it.id.startsWith("esper-journal") }
         when (currentSort) {
-            BookSortOption.RECENTLY_UPDATED -> nonJournal.sortedWith(
-                compareByDescending<NotebookEntity> { it.isPinned }.thenByDescending { it.updatedAt }
-            )
-            BookSortOption.OLDEST_UPDATED -> nonJournal.sortedWith(
-                compareByDescending<NotebookEntity> { it.isPinned }.thenBy { it.updatedAt }
-            )
-            BookSortOption.RECENTLY_CREATED -> nonJournal.sortedWith(
-                compareByDescending<NotebookEntity> { it.isPinned }.thenByDescending { it.createdAt }
-            )
-            BookSortOption.OLDEST_CREATED -> nonJournal.sortedWith(
-                compareByDescending<NotebookEntity> { it.isPinned }.thenBy { it.createdAt }
-            )
+            BookSortOption.RECENTLY_CREATED -> nonJournal.sortedByDescending { it.createdAt }
+            BookSortOption.OLDEST_CREATED -> nonJournal.sortedBy { it.createdAt }
+            BookSortOption.RECENTLY_UPDATED -> nonJournal.sortedByDescending {
+                if (it.notesUpdatedAt > 0L) it.notesUpdatedAt else it.updatedAt
+            }
+            BookSortOption.OLDEST_UPDATED -> nonJournal.sortedBy {
+                if (it.notesUpdatedAt > 0L) it.notesUpdatedAt else it.updatedAt
+            }
             BookSortOption.TITLE_AZ -> nonJournal.sortedWith(
-                compareByDescending<NotebookEntity> { it.isPinned }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+                compareBy(String.CASE_INSENSITIVE_ORDER) { it.title }
             )
             BookSortOption.TITLE_ZA -> nonJournal.sortedWith(
-                compareByDescending<NotebookEntity> { it.isPinned }.thenByDescending(String.CASE_INSENSITIVE_ORDER) { it.title }
+                compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.title }
             )
         }
     }
@@ -127,15 +119,10 @@ fun BookshelfScreen(
         shelves.find { it.id == selectedShelfId }
     }
 
-    // Exact membership set. The previous implementation used
-    // `notebookIdsCsv.contains(book.id)`, a substring match over the joined
-    // CSV, so "book-1" also matched a shelf containing "book-10".
     val shelfBookIds = remember(currentShelf) {
         BookshelfFiltering.shelfBookIds(currentShelf)
     }
 
-    // A stale / deleted shelf id must not blank the whole bookshelf: fall back
-    // to "no shelf filter" instead of matching nothing.
     val shelfFilterActive = selectedShelfId != null && currentShelf != null
 
     val filtered = remember(
@@ -153,12 +140,6 @@ fun BookshelfScreen(
             shelfFilterActive = shelfFilterActive
         )
     }
-
-    // No manual pagination: the grid below is a LazyVerticalGrid, so it
-    // virtualises the whole library and the user scrolls through every book.
-    // The old 6-books-per-page pager hid books behind a thin strip at the very
-    // bottom of the screen - a book that happened to sort last (for example
-    // the only one without an artwork) looked like it did not exist at all.
 
     fun triggerRefresh() {
         if (!isRefreshing) {
@@ -375,11 +356,6 @@ fun BookshelfScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        // Selecting a shelf clears the tag
-                                        // filter: the two filters are
-                                        // mutually exclusive, so a shelf never
-                                        // renders as the intersection of two
-                                        // unrelated selections.
                                         selectedShelfId = s.id
                                         onSelectTagFilter("All")
                                         coroutineScope.launch { drawerState.close() }
@@ -442,86 +418,81 @@ fun BookshelfScreen(
                         )
                     }
                     TopAppBar(
-                    title = {
-                        Surface(
-                            shape = RoundedCornerShape(22.dp),
-                            color = SpaceBlack,
-                            border = BorderStroke(1.dp, BorderSlate),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(40.dp)
-                        ) {
-                            Row(
+                        title = {
+                            Surface(
+                                shape = RoundedCornerShape(22.dp),
+                                color = SpaceBlack,
+                                border = BorderStroke(1.dp, BorderSlate),
                                 modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .fillMaxWidth()
+                                    .height(40.dp)
                             ) {
-                                Icon(
-                                    Icons.Default.Search,
-                                    contentDescription = "Search",
-                                    tint = TextMuted,
-                                    modifier = Modifier.size(17.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Box(
-                                    modifier = Modifier.weight(1f),
-                                    contentAlignment = Alignment.CenterStart
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    if (searchQuery.isEmpty()) {
-                                        Text(
-                                            text = "Search notebooks, tags...",
-                                            color = TextMuted,
-                                            fontSize = 13.sp,
-                                            lineHeight = 18.sp
+                                    Icon(
+                                        Icons.Default.Search,
+                                        contentDescription = "Search",
+                                        tint = TextMuted,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Box(
+                                        modifier = Modifier.weight(1f),
+                                        contentAlignment = Alignment.CenterStart
+                                    ) {
+                                        if (searchQuery.isEmpty()) {
+                                            Text(
+                                                text = "Search notebooks, tags...",
+                                                color = TextMuted,
+                                                fontSize = 13.sp,
+                                                lineHeight = 18.sp
+                                            )
+                                        }
+                                        BasicTextField(
+                                            value = searchQuery,
+                                            onValueChange = { searchQuery = it },
+                                            singleLine = true,
+                                            textStyle = TextStyle(
+                                                color = TextPrimary,
+                                                fontSize = 13.sp,
+                                                lineHeight = 18.sp
+                                            ),
+                                            cursorBrush = SolidColor(IndigoAccent),
+                                            modifier = Modifier.fillMaxWidth()
                                         )
                                     }
-                                    BasicTextField(
-                                        value = searchQuery,
-                                        onValueChange = {
-                                            searchQuery = it
-                                        },
-                                        singleLine = true,
-                                        textStyle = TextStyle(
-                                            color = TextPrimary,
-                                            fontSize = 13.sp,
-                                            lineHeight = 18.sp
-                                        ),
-                                        cursorBrush = SolidColor(IndigoAccent),
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                }
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(
-                                        onClick = { searchQuery = "" },
-                                        modifier = Modifier.size(20.dp)
-                                    ) {
-                                        Icon(Icons.Default.Close, contentDescription = "Clear", tint = TextMuted, modifier = Modifier.size(14.dp))
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(
+                                            onClick = { searchQuery = "" },
+                                            modifier = Modifier.size(20.dp)
+                                        ) {
+                                            Icon(Icons.Default.Close, contentDescription = "Clear", tint = TextMuted, modifier = Modifier.size(14.dp))
+                                        }
                                     }
                                 }
                             }
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = { coroutineScope.launch { drawerState.open() } }) {
-                            Icon(Icons.Default.Menu, contentDescription = "Menu", tint = TextPrimary)
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = onOpenSettingsScreen) {
-                            Icon(Icons.Default.Settings, contentDescription = "Settings", tint = TextPrimary)
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
+                        },
+                        navigationIcon = {
+                            IconButton(onClick = { coroutineScope.launch { drawerState.open() } }) {
+                                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = TextPrimary)
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = onOpenSettingsScreen) {
+                                Icon(Icons.Default.Settings, contentDescription = "Settings", tint = TextPrimary)
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = CosmicSlate)
                     )
                 }
             },
             bottomBar = {
                 CustomBottomNavBar(
                     onOpenLibrary = {
-                        // The Library tab must always land on the complete,
-                        // unfiltered bookshelf - it used to clear only the tag
-                        // filter, leaving the shelf filter in place.
                         selectedShelfId = null
                         onSelectTagFilter("All")
                         searchQuery = ""
@@ -543,12 +514,13 @@ fun BookshelfScreen(
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     val quickTags = remember(notebooks) {
-                        val extracted = notebooks.filter { !it.id.startsWith("esper-journal") }.flatMap { it.tagsCsv.split(",") }
+                        val extracted = notebooks.filter { !it.id.startsWith("esper-journal") }
+                            .flatMap { it.tagsCsv.split(",") }
                             .map { it.trim() }
-                            .filter { it.isNotEmpty() }
+                            .filter { it.isNotEmpty() && !it.equals("Bookmarks", ignoreCase = true) }
                             .distinct()
                             .take(6)
-                        listOf("All") + extracted
+                        listOf("All", "Bookmarks") + extracted
                     }
 
                     LazyRow(
@@ -576,35 +548,54 @@ fun BookshelfScreen(
 
                         items(quickTags) { tag ->
                             val isSelected = tag == selectedTagFilter && selectedShelfId == null
+                            val isBookmarkTag = tag.equals("Bookmarks", ignoreCase = true)
                             Surface(
                                 onClick = {
-                                    // Selecting a tag clears the shelf filter
-                                    // for the same reason as above.
                                     selectedShelfId = null
                                     onSelectTagFilter(tag)
                                 },
                                 shape = RoundedCornerShape(20.dp),
-                                color = if (isSelected) IndigoAccent else CosmicSlate
+                                color = if (isSelected) (if (isBookmarkTag) AmberGlow else IndigoAccent) else CosmicSlate
                             ) {
-                                Text(
-                                    text = tag,
-                                    color = if (isSelected) TextPrimary else TextSecondary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (isBookmarkTag) {
+                                        Icon(
+                                            Icons.Default.Bookmark,
+                                            contentDescription = null,
+                                            tint = if (isSelected) Color.Black else AmberGlow,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                    }
+                                    Text(
+                                        text = tag,
+                                        color = if (isSelected) (if (isBookmarkTag) Color.Black else TextPrimary) else (if (isBookmarkTag) AmberGlow else TextSecondary),
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isSelected || isBookmarkTag) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                }
                             }
                         }
                     }
 
-                    // Prominent shelf heading: what shelf am I in?
-                    // `currentShelf` is resolved once at the top of the screen.
-                    val shelfTitle = currentShelf?.title ?: "All Notebooks"
+                    val shelfTitle = when {
+                        currentShelf != null -> currentShelf.title
+                        selectedTagFilter.equals("Bookmarks", ignoreCase = true) -> "Bookmarks"
+                        else -> "All Notebooks"
+                    }
+                    val subtitleText = when {
+                        selectedTagFilter.equals("Bookmarks", ignoreCase = true) -> "${filtered.size} bookmarked"
+                        else -> "${filtered.size} books available"
+                    }
                     val shelfColor = remember(currentShelf) {
                         try {
                             currentShelf?.let { Color(android.graphics.Color.parseColor(it.color)) } ?: IndigoAccent
                         } catch (_: Exception) { IndigoAccent }
                     }
+
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -633,7 +624,7 @@ fun BookshelfScreen(
                                     )
                                 }
                                 Text(
-                                    text = "${filtered.size} books available",
+                                    text = subtitleText,
                                     color = TextMuted,
                                     fontSize = 11.sp,
                                     modifier = Modifier.padding(start = 18.dp)
@@ -658,9 +649,6 @@ fun BookshelfScreen(
                                 if (selectedShelfId != null || selectedTagFilter != "All" || searchQuery.isNotEmpty()) {
                                     TextButton(
                                         onClick = {
-                                            // Clears every filter at once so the
-                                            // button always means "show me the
-                                            // whole library".
                                             selectedShelfId = null
                                             onSelectTagFilter("All")
                                             searchQuery = ""
@@ -672,7 +660,6 @@ fun BookshelfScreen(
                                     Spacer(modifier = Modifier.width(6.dp))
                                 }
 
-                                // Sort Dropdown Component
                                 Box {
                                     Surface(
                                         onClick = { sortDropdownExpanded = true },
@@ -755,7 +742,8 @@ fun BookshelfScreen(
                                     onClick = { onOpenNotebook(book.id) },
                                     onEdit = { onConfigureNotebook(book) },
                                     onDelete = { bookToDelete = book },
-                                    onSetShelf = { bookToSetShelf = book }
+                                    onSetShelf = { bookToSetShelf = book },
+                                    onToggleBookmark = { onToggleBookmark(book.id) }
                                 )
                             }
                         }
